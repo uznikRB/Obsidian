@@ -1,3 +1,4 @@
+local Library = [=[
 local cloneref = (cloneref or clonereference or function(instance: any)
     return instance
 end)
@@ -10,6 +11,7 @@ local UserInputService: UserInputService = cloneref(game:GetService("UserInputSe
 local TextService: TextService = cloneref(game:GetService("TextService"))
 local Teams: Teams = cloneref(game:GetService("Teams"))
 local TweenService: TweenService = cloneref(game:GetService("TweenService"))
+local HttpService: HttpService = cloneref(game:GetService("HttpService"))
 
 local getgenv = getgenv or function()
     return shared
@@ -22,6 +24,59 @@ end
 
 local LocalPlayer = Players.LocalPlayer or Players.PlayerAdded:Wait()
 local Mouse = cloneref(LocalPlayer:GetMouse())
+
+--// Auto-cleanup: выгружаем предыдущий экземпляр перед созданием нового \\--
+do
+    local Env = getgenv()
+    local Old = Env.__ObsidianInstance
+
+    if typeof(Old) == "table" and typeof(Old.Unload) == "function" then
+        pcall(Old.Unload, Old)
+    end
+    Env.__ObsidianInstance = nil
+
+    --// Подстраховка: гуи от старых версий без реестра
+    local Roots = { CoreGui, LocalPlayer:FindFirstChildOfClass("PlayerGui") }
+    local OkHui, Hui = pcall(gethui)
+    if OkHui and typeof(Hui) == "Instance" then
+        table.insert(Roots, Hui)
+    end
+
+    for _, Root in Roots do
+        if typeof(Root) ~= "Instance" then continue end
+
+        for _, Gui in Root:GetChildren() do
+            if Gui:IsA("ScreenGui") and (Gui.Name == "Obsidian" or Gui.Name == "ObsidianLoading") then
+                pcall(Gui.Destroy, Gui)
+            end
+        end
+    end
+end
+
+local clonefunction = (clonefunction or copyfunction or function(func) 
+    return func 
+end)
+
+local isfolder, isfile, listfiles = isfolder, isfile, listfiles
+local isfolder_copy, isfile_copy, listfiles_copy = clonefunction(isfolder), clonefunction(isfile), clonefunction(listfiles)
+local isfolder_success, isfolder_error = pcall(function() return isfolder_copy("test" .. tostring(math.random(1000000, 9999999))) end)
+
+if isfolder_success == false or typeof(isfolder_error) ~= "boolean" then
+    isfolder = function(folder)
+        local success, data = pcall(isfolder_copy, folder)
+        return (if success then data else false)
+    end
+
+    isfile = function(file)
+        local success, data = pcall(isfile_copy, file)
+        return (if success then data else false)
+    end
+
+    listfiles = function(folder)
+        local success, data = pcall(listfiles_copy, folder)
+        return (if success then data else {})
+    end
+end
 
 local Labels = {}
 local Buttons = {}
@@ -404,6 +459,13 @@ local Templates = {
 
         UnlockMouseWhileOpen = true,
 
+        --// Hover Sidebar (выезжает / задвигается как в Compkiller) \\--
+        HoverSidebar = true,
+        SidebarMode = "Hover", -- "Hover" | "Expanded" | "Collapsed"
+        SidebarExpandedWidth = 176,
+        SidebarSpeed = 12,
+        SidebarCollapseDelay = 0.12,
+
         EnableSidebarResize = false,
         EnableCompacting = true,
         DisableCompactingSnap = false,
@@ -424,22 +486,22 @@ local Templates = {
         --// Animations \\--
         Animations = {
             ToggleWindow = false,
-            TabSwitch = false,
-            Groupbox = false,
-            Dropdown = false,
-            KeyPicker = false,
+            TabSwitch = true,
+            Groupbox = true,
+            Dropdown = true,
+            KeyPicker = true,
         },
 
         TabTransitionTime = 0.22,
         TabSwipeOffset = 26,
         TabSwipeFrom = "bottom",
         TabButtonsStyle = {
-            Gap = 0,
-            Padding = 0,
-            CornerRadius = 0,
-            Indicator = false,
-            IndicatorWidth = 2,
-            IndicatorHeight = 20,
+            Gap = 4,
+            Padding = 6,
+            CornerRadius = 6,
+            Indicator = true,
+            IndicatorWidth = 3,
+            IndicatorHeight = 18,
         },
     },
     Groupbox = {
@@ -1164,6 +1226,10 @@ local function ApplySearchToTab(Tab, Search)
     end
 
     for _, Tabbox in Tab.Tabboxes do
+        if Tabbox.Visible == false then
+            continue
+        end
+
         local VisibleTabs = 0
         local VisibleElements = {}
         local SubTabScores = {}
@@ -1322,7 +1388,7 @@ local function ResetTab(Tab)
         if Tabbox.ActiveTab then
             Tabbox.ActiveTab:Resize()
         end
-        Tabbox.BoxHolder.Visible = true
+        Tabbox.BoxHolder.Visible = Tabbox.Visible ~= false
         SyncPopOutVisibility(Tabbox)
     end
 end
@@ -5041,15 +5107,16 @@ do
                 elseif KeyPicker.Mode == "Press" then
                     KeyPicker:DoClick()
                 elseif KeyPicker.Mode == "Hold" then
-                    InputChanged = Input.Changed:Connect(function()
+                    local HoldChanged
+                    HoldChanged = Input.Changed:Connect(function()
                         if KeyPicker:GetState() then
                             return
                         end
 
                         KeyPicker:Update()
-                        if InputChanged and InputChanged.Connected then
-                            InputChanged:Disconnect()
-                            InputChanged = nil
+                        if HoldChanged then
+                            HoldChanged:Disconnect()
+                            HoldChanged = nil
                         end
                     end)
                 end
@@ -8229,11 +8296,24 @@ do
         local Pool = {}
         local FilteredEntries = {}
 
+        local EmptyLabel = New("TextLabel", {
+            BackgroundTransparency = 1,
+            Size = UDim2.new(1, 0, 0, ItemHeight),
+            Text = "No values",
+            TextSize = 14,
+            TextTransparency = 0.6,
+            Visible = false,
+            Parent = MenuTable.Menu,
+        })
+
         function Dropdown:RecalculateListSize(Count)
             local ItemCount = Count or #FilteredEntries
-            local Y = math.clamp(ItemCount * ItemHeight, 0, Info.MaxVisibleDropdownItems * ItemHeight)
+            EmptyLabel.Visible = ItemCount == 0
 
-            MenuTable.Menu.CanvasSize = UDim2.fromOffset(0, ItemCount * ItemHeight)
+            local Rows = math.max(ItemCount, 1)
+            local Y = math.clamp(Rows * ItemHeight, 0, Info.MaxVisibleDropdownItems * ItemHeight)
+
+            MenuTable.Menu.CanvasSize = UDim2.fromOffset(0, Rows * ItemHeight)
 
             MenuTable:SetSize(function()
                 return UDim2.fromOffset((DisplayContainer.AbsoluteSize.X / Library.DPIScale), Y)
@@ -10584,6 +10664,391 @@ function Library:Notify(...)
     return Data
 end
 
+--// Conditions (Library:If) \\--
+Library.Conditions = {}
+local ConditionConnection
+
+local function ConditionEquals(A, B)
+    if A == B then
+        return true
+    end
+
+    if typeof(A) ~= typeof(B) then
+        local NumA, NumB = tonumber(A), tonumber(B)
+        return NumA ~= nil and NumA == NumB
+    end
+
+    return false
+end
+
+local function ResolveConditionSource(Source)
+    if typeof(Source) == "string" then
+        return Toggles[Source] or Options[Source]
+    end
+
+    return Source
+end
+
+local function ResolveConditionTarget(Target)
+    if typeof(Target) ~= "string" then
+        return Target
+    end
+
+    local Found = Toggles[Target] or Options[Target] or Labels[Target] or Buttons[Target] or Library.Tabs[Target]
+    if Found then
+        return Found
+    end
+
+    for _, Tab in Library.Tabs do
+        if typeof(Tab) ~= "table" then
+            continue
+        end
+
+        if Tab.Groupboxes and Tab.Groupboxes[Target] then
+            return Tab.Groupboxes[Target]
+        end
+        if Tab.Tabboxes and Tab.Tabboxes[Target] then
+            return Tab.Tabboxes[Target]
+        end
+    end
+
+    return nil
+end
+
+local function MatchConditionValue(Element, Expected)
+    local Value
+    if Element.Type == "KeyPicker" then
+        Value = Element:GetState()
+    else
+        Value = Element.Value
+    end
+
+    --// Custom function: function(Value, Element) -> boolean \\--
+    if typeof(Expected) == "function" then
+        local Success, Result = pcall(Expected, Value, Element)
+        return Success and not not Result
+    end
+
+    --// Dropdown \\--
+    if Element.Type == "Dropdown" then
+        local function Has(Candidate)
+            if Element.Multi then
+                return typeof(Value) == "table" and Value[Candidate] == true
+            end
+
+            return Value == Candidate
+        end
+
+        if Expected == nil then
+            if Element.Multi then
+                return typeof(Value) ~= "table" or next(Value) == nil
+            end
+
+            return Value == nil
+        end
+
+        if typeof(Expected) == "table" then
+            for _, Candidate in Expected do
+                if Has(Candidate) then
+                    return true
+                end
+            end
+
+            return false
+        end
+
+        return Has(Expected)
+    end
+
+    --// Range: { Min = 10, Max = 50 } \\--
+    if typeof(Expected) == "table" then
+        if Expected.Min ~= nil or Expected.Max ~= nil then
+            local Number = tonumber(Value)
+            if not Number then
+                return false
+            end
+
+            if Expected.Min ~= nil and Number < Expected.Min then
+                return false
+            end
+            if Expected.Max ~= nil and Number > Expected.Max then
+                return false
+            end
+
+            return true
+        end
+
+        --// List of allowed values: { 1, 5, 10 } \\--
+        for _, Candidate in Expected do
+            if ConditionEquals(Value, Candidate) then
+                return true
+            end
+        end
+
+        return false
+    end
+
+    return ConditionEquals(Value, Expected)
+end
+
+--// Returns true / false, or nil if some source does not exist (yet) \\--
+local function EvaluateCondition(Rule)
+    if typeof(Rule) == "function" then
+        local Success, Result = pcall(Rule)
+        return Success and not not Result
+    end
+
+    if typeof(Rule) ~= "table" then
+        return nil
+    end
+
+    local Result
+    local Group = Rule.Any or Rule.All
+
+    if typeof(Group) == "table" then
+        local IsAny = Rule.Any ~= nil
+        Result = not IsAny
+
+        for _, Child in Group do
+            local ChildResult = EvaluateCondition(Child)
+            if ChildResult == nil then
+                return nil
+            end
+
+            if IsAny then
+                if ChildResult then
+                    Result = true
+                end
+            elseif not ChildResult then
+                Result = false
+            end
+        end
+    else
+        local Element = ResolveConditionSource(Rule.Element or Rule.Source or Rule[1])
+        if typeof(Element) ~= "table" or Element.Destroyed or Element.Type == nil then
+            return nil
+        end
+
+        local Expected = Rule[2]
+        if Rule.Value ~= nil then
+            Expected = Rule.Value
+        elseif Rule.Min ~= nil or Rule.Max ~= nil then
+            Expected = { Min = Rule.Min, Max = Rule.Max }
+        end
+
+        Result = MatchConditionValue(Element, Expected)
+    end
+
+    if Rule.Not == true then
+        Result = not Result
+    end
+
+    return Result
+end
+
+local function SetConditionTargetVisible(Target, Visible: boolean): boolean
+    if typeof(Target) == "function" then
+        Library:SafeCallback(Target, Visible)
+        return false
+    end
+
+    if typeof(Target) ~= "table" or Target.Destroyed then
+        return false
+    end
+
+    --// Tabbox \\--
+    if Target.Type == "Tabbox" then
+        Target.Visible = Visible
+        Target.BoxHolder.Visible = Visible
+        SyncPopOutVisibility(Target)
+        return true
+    end
+
+    --// Tab \\--
+    if Target.Window and Target.Button and Target.Container and typeof(Target.SetVisible) == "function" then
+        local WasActive = Library.ActiveTab == Target
+        Target:SetVisible(Visible)
+
+        if not Visible and WasActive then
+            local Best
+            for _, Other in Library.Tabs do
+                if Other ~= Target and typeof(Other) == "table" and Other.Button and Other.Button.Visible and Other.Show then
+                    if not Best or Other.Button.LayoutOrder < Best.Button.LayoutOrder then
+                        Best = Other
+                    end
+                end
+            end
+
+            if Best then
+                Best:Show()
+            end
+        elseif Visible and not Library.ActiveTab then
+            Target:Show()
+        end
+
+        return true
+    end
+
+    --// Any element / Groupbox / Label / Divider etc. \\--
+    if typeof(Target.SetVisible) == "function" then
+        local Success, ErrorMessage = pcall(Target.SetVisible, Target, Visible)
+        if not Success then
+            warn("Library:If failed to change visibility: " .. tostring(ErrorMessage))
+            return false
+        end
+
+        return true
+    end
+
+    return false
+end
+
+local function IsSingleConditionRule(Value)
+    if Value.Element or Value.Source or Value.Any or Value.All then
+        return true
+    end
+
+    local First = Value[1]
+    return typeof(First) == "string" or (typeof(First) == "table" and First.Type ~= nil)
+end
+
+function Library:If(Info, Rules, Mode)
+    local Config
+    if typeof(Info) == "table" and Info.Conditions ~= nil then
+        Config = Info
+    else
+        Config = { Targets = { Info }, Conditions = Rules, Mode = Mode }
+    end
+
+    local Targets = Config.Targets
+    if typeof(Targets) ~= "table" then
+        Targets = { Config.Target }
+    end
+    assert(#Targets > 0, "Library:If - Target is missing.")
+
+    local RuleList = Config.Conditions
+    if typeof(RuleList) == "function" then
+        RuleList = { RuleList }
+    end
+    assert(typeof(RuleList) == "table", "Library:If - Conditions must be a table.")
+    if IsSingleConditionRule(RuleList) then
+        RuleList = { RuleList }
+    end
+    assert(#RuleList > 0, "Library:If - Conditions are empty.")
+
+    local Condition = {
+        Destroyed = false,
+
+        Targets = Targets,
+        Rules = RuleList,
+        Mode = string.lower(tostring(Config.Mode or "All")) == "any" and "Any" or "All",
+        Invert = Config.Invert == true,
+
+        Applied = {},
+    }
+
+    function Condition:Evaluate()
+        local IsAny = Condition.Mode == "Any"
+        local Final = not IsAny
+
+        for _, Rule in Condition.Rules do
+            local Result = EvaluateCondition(Rule)
+            if Result == nil then
+                return nil
+            end
+
+            if IsAny then
+                if Result then
+                    Final = true
+                end
+            elseif not Result then
+                Final = false
+            end
+        end
+
+        return Final
+    end
+
+    function Condition:Update()
+        if Condition.Destroyed then
+            return
+        end
+
+        local Met = Condition:Evaluate()
+        if Met == nil then
+            return
+        end
+
+        if Condition.Invert then
+            Met = not Met
+        end
+
+        local NeedSearchRefresh = false
+        for Index, Target in ipairs(Condition.Targets) do
+            local Resolved = ResolveConditionTarget(Target)
+            if Resolved == nil then
+                continue
+            end
+
+            local Entry = Condition.Applied[Index]
+            if Entry and Entry.Object == Resolved and Entry.Visible == Met then
+                continue
+            end
+
+            Condition.Applied[Index] = { Object = Resolved, Visible = Met }
+            if SetConditionTargetVisible(Resolved, Met) then
+                NeedSearchRefresh = true
+            end
+        end
+
+        if NeedSearchRefresh and Library.Searching then
+            Library:UpdateSearch(Library.SearchText)
+        end
+    end
+
+    function Condition:Refresh()
+        table.clear(Condition.Applied)
+        Condition:Update()
+    end
+
+    function Condition:Destroy()
+        Condition.Destroyed = true
+
+        local Idx = table.find(Library.Conditions, Condition)
+        if Idx then
+            table.remove(Library.Conditions, Idx)
+        end
+    end
+
+    table.insert(Library.Conditions, Condition)
+
+    if not ConditionConnection then
+        ConditionConnection = Library:GiveSignal(RunService.Heartbeat:Connect(function()
+            if Library.Unloaded then
+                return
+            end
+
+            for Index = #Library.Conditions, 1, -1 do
+                local Current = Library.Conditions[Index]
+                if not Current or Current.Destroyed then
+                    table.remove(Library.Conditions, Index)
+                else
+                    Current:Update()
+                end
+            end
+        end))
+    end
+
+    Condition:Update()
+    return Condition
+end
+
+function Library:UpdateConditions()
+    for _, Condition in Library.Conditions do
+        Condition:Refresh()
+    end
+end
+
 function Library:CreateWindow(WindowInfo)
     WindowInfo = Library:Validate(WindowInfo, Templates.Window)
     local ViewportSize: Vector2 = workspace.CurrentCamera.ViewportSize
@@ -10668,9 +11133,34 @@ function Library:CreateWindow(WindowInfo)
         AvoidCoreGui = WindowInfo.SnapAvoidCoreGui,
     }
 
+    local HoverSidebar = WindowInfo.HoverSidebar == true and not WindowInfo.EnableSidebarResize and not Library.IsMobile
+    local SidebarMode = tostring(WindowInfo.SidebarMode)
+    if SidebarMode ~= "Hover" and SidebarMode ~= "Expanded" and SidebarMode ~= "Collapsed" then
+        SidebarMode = "Hover"
+    end
+
+    local SidebarSpeed = tonumber(WindowInfo.SidebarSpeed) or 12
+    local SidebarCompactW = WindowInfo.SidebarCompactWidth
+    local SidebarExpandedW = math.max(tonumber(WindowInfo.SidebarExpandedWidth) or 176, SidebarCompactW + 60)
+    local TitleCorner
+
     local InitialLeftWidth = math.ceil(WindowInfo.Size.X.Offset * 0.3)
-    local IsCompact = WindowInfo.SidebarCompacted
+    if HoverSidebar then
+        if SidebarMode == "Expanded" then
+            InitialLeftWidth = math.clamp(
+                SidebarExpandedW,
+                SidebarCompactW,
+                math.max(SidebarCompactW, WindowInfo.Size.X.Offset - WindowInfo.MinContainerWidth - 1)
+            )
+        else
+            InitialLeftWidth = SidebarCompactW
+        end
+    end
+
+    local IsCompact = if HoverSidebar then SidebarMode ~= "Expanded" else WindowInfo.SidebarCompacted
     local LastExpandedWidth = InitialLeftWidth
+    local SidebarVisualW = InitialLeftWidth
+    local SidebarLayoutW = InitialLeftWidth
 
     do
         Library.KeybindFrame, Library.KeybindContainer = Library:AddDraggableMenu("Keybinds")
@@ -10713,7 +11203,7 @@ function Library:CreateWindow(WindowInfo)
             Position = UDim2.fromOffset(InitialLeftWidth, 0),
             Size = UDim2.new(0, 1, 1, -21),
             Parent = MainFrame,
-            ZIndex = 2
+            ZIndex = 4
         })
 
         local BackgroundIcon = Library:GetCustomIcon(WindowInfo.BackgroundImage)
@@ -10777,17 +11267,35 @@ function Library:CreateWindow(WindowInfo)
 
         --// Title \\--
         TitleHolder = New("Frame", {
-            BackgroundTransparency = 1,
+            BackgroundColor3 = function()
+                return Library:GetBetterColor(Library.Scheme.BackgroundColor, -1)
+            end,
+            BackgroundTransparency = HoverSidebar and 0 or 1,
+            ClipsDescendants = HoverSidebar,
             Size = UDim2.new(0, InitialLeftWidth, 1, 0),
+            ZIndex = HoverSidebar and 5 or 1,
             Parent = TopBar,
         })
         New("UIListLayout", {
             FillDirection = Enum.FillDirection.Horizontal,
-            HorizontalAlignment = Enum.HorizontalAlignment.Center,
+            HorizontalAlignment = HoverSidebar and Enum.HorizontalAlignment.Left or Enum.HorizontalAlignment.Center,
             VerticalAlignment = Enum.VerticalAlignment.Center,
             Padding = UDim.new(0, 6),
             Parent = TitleHolder,
         })
+        if HoverSidebar then
+            New("UIPadding", {
+                PaddingLeft = UDim.new(0, math.max(4, math.floor((SidebarCompactW - WindowInfo.IconSize.X.Offset) / 2))),
+                Parent = TitleHolder,
+            })
+            TitleCorner = New("UICorner", {
+                TopLeftRadius = UDim.new(0, WindowInfo.CornerRadius),
+                TopRightRadius = UDim.new(0, 0),
+                BottomLeftRadius = UDim.new(0, 0),
+                BottomRightRadius = UDim.new(0, 0),
+                Parent = TitleHolder,
+            })
+        end
 
         if WindowInfo.Icon then
             local Icon = Library:GetCustomIcon(WindowInfo.Icon)
@@ -10813,7 +11321,7 @@ function Library:CreateWindow(WindowInfo)
             WindowInfo.Title,
             Library.Scheme.Font,
             20,
-            TitleHolder.AbsoluteSize.X - (WindowInfo.Icon and WindowInfo.IconSize.X.Offset + 6 or 0) - 12
+            HoverSidebar and 1000 or (TitleHolder.AbsoluteSize.X - (WindowInfo.Icon and WindowInfo.IconSize.X.Offset + 6 or 0) - 12)
         )
         WindowTitle = New("TextLabel", {
             BackgroundTransparency = 1,
@@ -11031,12 +11539,14 @@ function Library:CreateWindow(WindowInfo)
 
         --// Tabs \\--
         Tabs = New("ScrollingFrame", {
+            Active = true,
             AutomaticCanvasSize = Enum.AutomaticSize.Y,
             BackgroundColor3 = "BackgroundColor",
             CanvasSize = UDim2.fromScale(0, 0),
             Position = UDim2.fromOffset(0, 49),
             ScrollBarThickness = 0,
             Size = UDim2.new(0, InitialLeftWidth, 1, -70),
+            ZIndex = 3,
             Parent = MainFrame,
         })
         New("UIListLayout", {
@@ -11293,44 +11803,18 @@ function Library:CreateWindow(WindowInfo)
         end
     end
 
-    local function ApplyCompact()
-        IsCompact = Window:GetSidebarWidth() == WindowInfo.SidebarCompactWidth
-        if WindowInfo.DisableCompactingSnap then
-            IsCompact = Window:GetSidebarWidth() <= WindowInfo.CompactWidthActivation
-        end
-
-        WindowTitle.Visible = not IsCompact
-        if not WindowInfo.Icon then
-            WindowIcon.Visible = IsCompact
-        end
-
-        for _, Button in Library.TabButtons do
-            if not Button.Icon then
-                continue
-            end
-
-            Button.Label.Visible = not IsCompact
-            Button.Padding.PaddingBottom = UDim.new(0, IsCompact and 6 or 11)
-            Button.Padding.PaddingLeft = UDim.new(0, IsCompact and 6 or 12)
-            Button.Padding.PaddingRight = UDim.new(0, IsCompact and 6 or 12)
-            Button.Padding.PaddingTop = UDim.new(0, IsCompact and 6 or 11)
-            Button.Icon.SizeConstraint = IsCompact and Enum.SizeConstraint.RelativeXY or Enum.SizeConstraint.RelativeYY
-        end
-    end
-
-    function Window:IsSidebarCompacted()
-        return IsCompact
-    end
-
-    function Window:SetCompact(State)
-        Window:SetSidebarWidth(State and WindowInfo.SidebarCompactWidth or LastExpandedWidth)
-    end
-
-    function Window:GetSidebarWidth()
-        return Tabs.Size.X.Offset
-    end
-
     function Window:SetSidebarWidth(Width)
+        if HoverSidebar then
+            Width = math.max(Width, SidebarCompactW)
+
+            DividerLine.Position = UDim2.fromOffset(Width, 0)
+            TitleHolder.Size = UDim2.new(0, Width, 1, 0)
+            Tabs.Size = UDim2.new(0, Width, 1, -70)
+
+            ApplyCompact()
+            return
+        end
+
         Width = math.clamp(Width, 48, MainFrame.Size.X.Offset - WindowInfo.MinContainerWidth - 1)
 
         DividerLine.Position = UDim2.fromOffset(Width, 0)
@@ -11345,6 +11829,327 @@ function Library:CreateWindow(WindowInfo)
         end
         if not IsCompact then
             LastExpandedWidth = Width
+        end
+    end
+
+    --// Hover Sidebar: плавно выезжает поверх контента и задвигается обратно \\--
+    if HoverSidebar then
+        local function Approach(Current: number, Target: number, Alpha: number): number
+            if math.abs(Target - Current) < 0.5 then
+                return Target
+            end
+
+            return Current + (Target - Current) * Alpha
+        end
+
+        local function ApplyLayoutWidth(Width: number)
+            RightWrapper.Size = UDim2.new(1, -Width - 57 - 1, 1, -16)
+            Container.Size = UDim2.new(1, -Width - 1, 1, -70)
+        end
+
+        local Hovering = false
+        local LastHoverTime = 0
+        local LastTabCount = -1
+
+        function Window:SetSidebarMode(Mode: string)
+            if Mode ~= "Hover" and Mode ~= "Expanded" and Mode ~= "Collapsed" then
+                return
+            end
+
+            SidebarMode = Mode
+        end
+
+        function Window:GetSidebarMode()
+            return SidebarMode
+        end
+
+        function Window:SetCompact(State)
+            Window:SetSidebarMode(State and "Collapsed" or "Hover")
+        end
+
+        ApplyCompact()
+
+        Library:GiveSignal(RunService.RenderStepped:Connect(function(DeltaTime: number)
+            if Library.Unloaded or not (MainFrame and MainFrame.Parent) then
+                return
+            end
+
+            local TabCount = #Library.TabButtons
+            local TabsChanged = TabCount ~= LastTabCount
+            LastTabCount = TabCount
+
+            --// Hover detection
+            local Over = false
+            if MainFrame.Visible and not Library.ActiveDialog then
+                local Position, Size = MainFrame.AbsolutePosition, MainFrame.AbsoluteSize
+                local MouseX, MouseY = Mouse.X, Mouse.Y
+
+                Over = MouseX >= Position.X
+                    and MouseX <= Position.X + Tabs.AbsoluteSize.X
+                    and MouseY >= Position.Y
+                    and MouseY <= Position.Y + Size.Y
+            end
+
+            if Over then
+                Hovering = true
+                LastHoverTime = os.clock()
+            elseif Hovering and os.clock() - LastHoverTime >= (tonumber(WindowInfo.SidebarCollapseDelay) or 0.12) then
+                Hovering = false
+            end
+
+            --// Targets
+            local WindowWidth = MainFrame.Size.X.Offset
+            local HoverWidth = math.clamp(SidebarExpandedW, SidebarCompactW, math.max(SidebarCompactW, WindowWidth - 40))
+            local PinnedWidth = math.clamp(
+                SidebarExpandedW,
+                SidebarCompactW,
+                math.max(SidebarCompactW, WindowWidth - WindowInfo.MinContainerWidth - 1)
+            )
+
+            local TargetVisual = SidebarCompactW
+            local TargetLayout = SidebarCompactW
+            if SidebarMode == "Expanded" then
+                TargetVisual = PinnedWidth
+                TargetLayout = PinnedWidth
+            elseif SidebarMode == "Hover" and Hovering then
+                TargetVisual = HoverWidth
+            end
+
+            local Alpha = 1
+            if SidebarSpeed > 0 then
+                Alpha = 1 - math.exp(-SidebarSpeed * math.min(DeltaTime, 0.1))
+            end
+
+            local NewVisual = Approach(SidebarVisualW, TargetVisual, Alpha)
+            local NewLayout = Approach(SidebarLayoutW, TargetLayout, Alpha)
+
+            if NewVisual ~= SidebarVisualW then
+                SidebarVisualW = NewVisual
+                Window:SetSidebarWidth(math.floor(NewVisual + 0.5))
+            elseif TabsChanged then
+                LastHoverCompact = nil
+                ApplyCompact()
+            end
+
+            if NewLayout ~= SidebarLayoutW then
+                SidebarLayoutW = NewLayout
+                ApplyLayoutWidth(math.floor(NewLayout + 0.5))
+            end
+
+            --// Пока сайдбар перекрывает поиск, не даём кликнуть "сквозь" заголовок
+            local Overlapping = SidebarVisualW > SidebarLayoutW + 2 and not SearchBox:IsFocused()
+            if SearchBox.TextEditable == Overlapping then
+                SearchBox.TextEditable = not Overlapping
+            end
+        end))
+    end
+
+    --// Готовая вкладка Settings (как в Compkiller) \\--
+    function Window:AddSettingsTab(Info)
+        Info = Info or {}
+
+        local SettingsTab = Window:AddTab({
+            Name = Info.Name or "Settings",
+            Icon = Info.Icon or "settings",
+            Description = Info.Description or "Interface and window settings",
+            Order = Info.Order or 9999,
+        })
+
+        local Interface = SettingsTab:AddGroupbox({ Side = "Left", Name = "Interface", IconName = "palette" })
+        local Animations = SettingsTab:AddGroupbox({ Side = "Left", Name = "Animations", IconName = "sparkles" })
+        local WindowBox = SettingsTab:AddGroupbox({ Side = "Right", Name = "Window", IconName = "app-window" })
+        local Notifications = SettingsTab:AddGroupbox({ Side = "Right", Name = "Notifications", IconName = "bell" })
+        local Menu = SettingsTab:AddGroupbox({ Side = "Right", Name = "Menu", IconName = "menu" })
+
+        --// Interface
+        if HoverSidebar then
+            Interface:AddDropdown("Settings_SidebarMode", {
+                Text = "Sidebar mode",
+                Values = { "Hover", "Expanded", "Collapsed" },
+                Default = SidebarMode,
+                Callback = function(Value)
+                    if Value then
+                        Window:SetSidebarMode(Value)
+                    end
+                end,
+            })
+
+            Interface:AddSlider("Settings_SidebarSpeed", {
+                Text = "Sidebar speed",
+                Default = math.clamp(SidebarSpeed, 2, 40),
+                Min = 2,
+                Max = 40,
+                Rounding = 0,
+                Callback = function(Value)
+                    SidebarSpeed = Value
+                end,
+            })
+
+            Interface:AddSlider("Settings_SidebarWidth", {
+                Text = "Sidebar width",
+                Default = math.clamp(SidebarExpandedW, SidebarCompactW + 60, 320),
+                Min = SidebarCompactW + 60,
+                Max = 320,
+                Suffix = "px",
+                Rounding = 0,
+                Callback = function(Value)
+                    SidebarExpandedW = Value
+                end,
+            })
+        end
+
+        local DPIValues = { "75%", "90%", "100%", "110%", "125%", "150%" }
+        Interface:AddDropdown("Settings_DPIScale", {
+            Text = "UI scale",
+            Values = DPIValues,
+            Default = tostring(math.floor(Library.DPIScale * 100 + 0.5)) .. "%",
+            Callback = function(Value)
+                local Number = tonumber((string.gsub(tostring(Value), "%%", "")))
+                if Number then
+                    Library:SetDPIScale(Number)
+                end
+            end,
+        })
+
+        if WindowInfo.Resizable then
+            Interface:AddSlider("Settings_CornerRadius", {
+                Text = "Corner radius",
+                Default = math.clamp(Library.CornerRadius, 0, 12),
+                Min = 0,
+                Max = 12,
+                Rounding = 0,
+                Callback = function(Value)
+                    pcall(Window.SetCornerRadius, Window, Value)
+                    if TitleCorner then
+                        TitleCorner.TopLeftRadius = UDim.new(0, Value)
+                    end
+                end,
+            })
+        end
+
+        --// Animations
+        local AnimationList = {
+            { "TabSwitch", "Tab swipe" },
+            { "Groupbox", "Groupbox collapse" },
+            { "Dropdown", "Dropdown slide" },
+            { "KeyPicker", "KeyPicker slide" },
+            { "ToggleWindow", "Window fade" },
+        }
+
+        for _, Entry in AnimationList do
+            local Key = Entry[1]
+
+            Animations:AddToggle("Settings_Anim_" .. Key, {
+                Text = Entry[2],
+                Default = Library.Animations and Library.Animations[Key] == true or false,
+                Callback = function(Value)
+                    if Library.Animations then
+                        Library.Animations[Key] = Value
+                    end
+                end,
+            })
+        end
+
+        Animations:AddDropdown("Settings_TabSwipeFrom", {
+            Text = "Tab swipe direction",
+            Values = { "bottom", "top", "left", "right", "auto" },
+            Default = string.lower(tostring(Library.TabSwipeFrom or "bottom")),
+            Callback = function(Value)
+                if Value then
+                    Window:SetAnimations(nil, nil, nil, Value)
+                end
+            end,
+        })
+
+        --// Window
+        WindowBox:AddToggle("Settings_CustomCursor", {
+            Text = "Custom cursor",
+            Default = Library.ShowCustomCursor,
+            Callback = function(Value)
+                Library.ShowCustomCursor = Value
+            end,
+        })
+
+        WindowBox:AddToggle("Settings_Snapping", {
+            Text = "Window snapping",
+            Default = WindowInfo.Snapping == true,
+            Callback = function(Value)
+                Window:SetSnapping(Value)
+            end,
+        })
+
+        WindowBox:AddToggle("Settings_AlwaysOnTop", {
+            Text = "Always on top",
+            Default = WindowInfo.AlwaysOnTop == true,
+            Callback = function(Value)
+                Window:SetAlwaysOnTop(Value)
+            end,
+        })
+
+        WindowBox:AddToggle("Settings_KeybindMenu", {
+            Text = "Show keybinds list",
+            Default = Library.KeybindFrame and Library.KeybindFrame.Visible or false,
+            Callback = function(Value)
+                if Library.KeybindFrame then
+                    Library.KeybindFrame.Visible = Value
+                end
+            end,
+        })
+
+        --// Notifications
+        Notifications:AddDropdown("Settings_NotifySide", {
+            Text = "Side",
+            Values = { "Right", "Left" },
+            Default = Library.NotifySide,
+            Callback = function(Value)
+                if Value then
+                    Library:SetNotifySide(Value)
+                end
+            end,
+        })
+
+        Notifications:AddButton({
+            Text = "Send test notification",
+            Func = function()
+                Library:Notify({
+                    Title = "Settings",
+                    Description = "Notifications are working!",
+                    Time = 3,
+                })
+            end,
+        })
+
+        --// Menu
+        Menu:AddLabel("Menu keybind"):AddKeyPicker("Settings_MenuKeybind", {
+            Default = typeof(Library.ToggleKeybind) == "EnumItem" and Library.ToggleKeybind.Name or "RightControl",
+            NoUI = true,
+            Text = "Menu keybind",
+        })
+        Library.ToggleKeybind = Options.Settings_MenuKeybind
+
+        Menu:AddButton({
+            Text = "Unload",
+            DoubleClick = true,
+            Risky = true,
+            Func = function()
+                Library:Unload()
+            end,
+        })
+
+        return SettingsTab
+    end
+
+        function Window:IsSidebarCompacted()
+        return IsCompact
+    end
+
+    function Window:GetSidebarWidth()
+        return Tabs.Size.X.Offset
+    end
+
+    if not HoverSidebar then
+        function Window:SetCompact(State)
+            Window:SetSidebarWidth(State and WindowInfo.SidebarCompactWidth or LastExpandedWidth)
         end
     end
 
@@ -14627,18 +15432,28 @@ Library:GiveSignal(Teams.ChildAdded:Connect(OnTeamChange))
 Library:GiveSignal(Teams.ChildRemoved:Connect(OnTeamChange))
 
 function Library:Unload()
+    if Library.Unloaded then
+        return
+    end
     Library.Unloaded = true
 
-    --// Disconnect connections
-    for Index = #Library.Signals, 1, -1 do
-        local Connection = table.remove(Library.Signals, Index)
-
-        if Connection and Connection.Connected then
-            Connection:Disconnect()
+    --// 1. Выключаем все функции: тогглы и тоггл-кейбинды
+    for _, Toggle in Toggles do
+        if typeof(Toggle) == "table" and Toggle.Value == true then
+            Toggle.Value = false
+            if typeof(Toggle.Callback) == "function" then pcall(Toggle.Callback, false) end
+            if typeof(Toggle.Changed) == "function" then pcall(Toggle.Changed, false) end
         end
     end
 
-    --// Run Unload Callbacks
+    for _, Option in Options do
+        if typeof(Option) == "table" and Option.Type == "KeyPicker" and Option.Toggled == true then
+            Option.Toggled = false
+            if typeof(Option.Callback) == "function" then pcall(Option.Callback, false) end
+        end
+    end
+
+    --// 2. Пользовательские OnUnload
     for _ = 1, #Library.UnloadSignals do
         local Callback = table.remove(Library.UnloadSignals, 1)
 
@@ -14647,32 +15462,59 @@ function Library:Unload()
         end
     end
 
-    --// Destroy elements
-    for Index = #Library.Tabs, 1, -1 do
-        local Tab = table.remove(Library.Tabs, Index)
+    --// 3. Отключаем ВСЕ соединения элементов (кейбинды, вьюпорты и т.д.)
+    local function DisconnectList(List)
+        if typeof(List) ~= "table" then return end
 
-        if Tab and Tab.Destroy then
-            Library:SafeCallback(Tab.Destroy, Tab)
+        for _, Connection in List do
+            pcall(function() Connection:Disconnect() end)
         end
     end
 
-    for Index = #Tooltips, 1, -1 do
-        local Tooltip = table.remove(Tooltips, Index)
+    local function DisconnectGroup(Group)
+        for _, Element in Group do
+            if typeof(Element) ~= "table" then continue end
 
-        if Tooltip and Tooltip.Destroy then
-            Library:SafeCallback(Tooltip.Destroy, Tooltip)
+            DisconnectList(Element.Connections)
+
+            if typeof(Element.Addons) == "table" then
+                for _, Addon in Element.Addons do
+                    if typeof(Addon) == "table" then
+                        DisconnectList(Addon.Connections)
+                    end
+                end
+            end
         end
     end
 
+    DisconnectGroup(Toggles)
+    DisconnectGroup(Options)
+    DisconnectGroup(Buttons)
+    DisconnectGroup(Labels)
+
+    --// 4. Глобальные сигналы библиотеки
+    for Index = #Library.Signals, 1, -1 do
+        local Connection = table.remove(Library.Signals, Index)
+
+        if Connection and Connection.Connected then
+            Connection:Disconnect()
+        end
+    end
+
+    --// 5. Курсор / мышь
+    pcall(function() RunService:UnbindFromRenderStep(Library.ShowCursorBinding) end)
+    pcall(function() UserInputService.MouseIconEnabled = Library.OriginalMouseIconEnabled end)
+
+    --// 6. Удаляем сами гуи
     if Library.ActiveLoading then
-        Library.ActiveLoading:Destroy()
+        pcall(function() Library.ActiveLoading:Destroy() end)
     end
 
     if ScreenGui then
-        ScreenGui:Destroy()
+        pcall(ScreenGui.Destroy, ScreenGui)
     end
 
-    --// Clear tables
+    --// 7. Чистим таблицы
     table.clear(Library.Registry)
 
     table.clear(Options)
@@ -14696,6 +15538,7 @@ function Library:Unload()
     table.clear(Library.DraggableElements)
     table.clear(Library.KeybindToggles)
     table.clear(Library.DependencyBoxes)
+    table.clear(Library.Conditions)
 
     table.clear(TransparencyCache)
     table.clear(ActiveTabTweens)
@@ -14707,9 +15550,2520 @@ function Library:Unload()
     Library.WindowContainer = nil
     Library.KeybindFrame = nil
     Library.KeybindContainer = nil
+    Library.Window = nil
 
-    getgenv().Library = nil
+    local Env = getgenv()
+    if Env.__ObsidianInstance == Library then
+        Env.__ObsidianInstance = nil
+    end
+    if Env.Library == Library then
+        Env.Library = nil
+    end
+    Env.ObsidianSaveManager = nil
+    Env.ObsidianThemeManager = nil
+end
 end
 
+--// Conditions (Library:If) \\--
+Library.Conditions = {}
+local ConditionConnection
+
+local function ConditionEquals(A, B)
+    if A == B then
+        return true
+    end
+
+    if typeof(A) ~= typeof(B) then
+        local NumA, NumB = tonumber(A), tonumber(B)
+        return NumA ~= nil and NumA == NumB
+    end
+
+    return false
+end
+
+local function ResolveConditionSource(Source)
+    if typeof(Source) == "string" then
+        return Toggles[Source] or Options[Source]
+    end
+
+    return Source
+end
+
+local function ResolveConditionTarget(Target)
+    if typeof(Target) ~= "string" then
+        return Target
+    end
+
+    local Found = Toggles[Target] or Options[Target] or Labels[Target] or Buttons[Target] or Library.Tabs[Target]
+    if Found then
+        return Found
+    end
+
+    for _, Tab in Library.Tabs do
+        if typeof(Tab) ~= "table" then
+            continue
+        end
+
+        if Tab.Groupboxes and Tab.Groupboxes[Target] then
+            return Tab.Groupboxes[Target]
+        end
+        if Tab.Tabboxes and Tab.Tabboxes[Target] then
+            return Tab.Tabboxes[Target]
+        end
+    end
+
+    return nil
+end
+
+local function MatchConditionValue(Element, Expected)
+    local Value
+    if Element.Type == "KeyPicker" then
+        Value = Element:GetState()
+    else
+        Value = Element.Value
+    end
+
+    if typeof(Expected) == "function" then
+        local Success, Result = pcall(Expected, Value, Element)
+        return Success and not not Result
+    end
+
+    if Element.Type == "Dropdown" then
+        local function Has(Candidate)
+            if Element.Multi then
+                return typeof(Value) == "table" and Value[Candidate] == true
+            end
+
+            return Value == Candidate
+        end
+
+        if Expected == nil then
+            if Element.Multi then
+                return typeof(Value) ~= "table" or next(Value) == nil
+            end
+
+            return Value == nil
+        end
+
+        if typeof(Expected) == "table" then
+            for _, Candidate in Expected do
+                if Has(Candidate) then
+                    return true
+                end
+            end
+
+            return false
+        end
+
+        return Has(Expected)
+    end
+
+    if typeof(Expected) == "table" then
+        if Expected.Min ~= nil or Expected.Max ~= nil then
+            local Number = tonumber(Value)
+            if not Number then
+                return false
+            end
+
+            if Expected.Min ~= nil and Number < Expected.Min then
+                return false
+            end
+            if Expected.Max ~= nil and Number > Expected.Max then
+                return false
+            end
+
+            return true
+        end
+
+        for _, Candidate in Expected do
+            if ConditionEquals(Value, Candidate) then
+                return true
+            end
+        end
+
+        return false
+    end
+
+    return ConditionEquals(Value, Expected)
+end
+
+local function EvaluateCondition(Rule)
+    if typeof(Rule) == "function" then
+        local Success, Result = pcall(Rule)
+        return Success and not not Result
+    end
+
+    if typeof(Rule) ~= "table" then
+        return nil
+    end
+
+    local Result
+    local Group = Rule.Any or Rule.All
+
+    if typeof(Group) == "table" then
+        local IsAny = Rule.Any ~= nil
+        Result = not IsAny
+
+        for _, Child in Group do
+            local ChildResult = EvaluateCondition(Child)
+            if ChildResult == nil then
+                return nil
+            end
+
+            if IsAny then
+                if ChildResult then
+                    Result = true
+                end
+            elseif not ChildResult then
+                Result = false
+            end
+        end
+    else
+        local Element = ResolveConditionSource(Rule.Element or Rule.Source or Rule[1])
+        if typeof(Element) ~= "table" or Element.Destroyed or Element.Type == nil then
+            return nil
+        end
+
+        local Expected = Rule[2]
+        if Rule.Value ~= nil then
+            Expected = Rule.Value
+        elseif Rule.Min ~= nil or Rule.Max ~= nil then
+            Expected = { Min = Rule.Min, Max = Rule.Max }
+        end
+
+        Result = MatchConditionValue(Element, Expected)
+    end
+
+    if Rule.Not == true then
+        Result = not Result
+    end
+
+    return Result
+end
+
+local function SetConditionTargetVisible(Target, Visible: boolean): boolean
+    if typeof(Target) == "function" then
+        Library:SafeCallback(Target, Visible)
+        return false
+    end
+
+    if typeof(Target) ~= "table" or Target.Destroyed then
+        return false
+    end
+
+    if Target.Type == "Tabbox" then
+        Target.Visible = Visible
+        Target.BoxHolder.Visible = Visible
+        SyncPopOutVisibility(Target)
+        return true
+    end
+
+    if Target.Window and Target.Button and Target.Container and typeof(Target.SetVisible) == "function" then
+        local WasActive = Library.ActiveTab == Target
+        Target:SetVisible(Visible)
+
+        if not Visible and WasActive then
+            local Best
+            for _, Other in Library.Tabs do
+                if Other ~= Target and typeof(Other) == "table" and Other.Button and Other.Button.Visible and Other.Show then
+                    if not Best or Other.Button.LayoutOrder < Best.Button.LayoutOrder then
+                        Best = Other
+                    end
+                end
+            end
+
+            if Best then
+                Best:Show()
+            end
+        elseif Visible and not Library.ActiveTab then
+            Target:Show()
+        end
+
+        return true
+    end
+
+    if typeof(Target.SetVisible) == "function" then
+        local Success, ErrorMessage = pcall(Target.SetVisible, Target, Visible)
+        if not Success then
+            warn("Library:If failed to change visibility: " .. tostring(ErrorMessage))
+            return false
+        end
+
+        return true
+    end
+
+    return false
+end
+
+local function IsSingleConditionRule(Value)
+    if Value.Element or Value.Source or Value.Any or Value.All then
+        return true
+    end
+
+    local First = Value[1]
+    return typeof(First) == "string" or (typeof(First) == "table" and First.Type ~= nil)
+end
+
+function Library:If(Info, Rules, Mode)
+    local Config
+    if typeof(Info) == "table" and Info.Conditions ~= nil then
+        Config = Info
+    else
+        Config = { Targets = { Info }, Conditions = Rules, Mode = Mode }
+    end
+
+    local Targets = Config.Targets
+    if typeof(Targets) ~= "table" then
+        Targets = { Config.Target }
+    end
+    assert(#Targets > 0, "Library:If - Target is missing.")
+
+    local RuleList = Config.Conditions
+    if typeof(RuleList) == "function" then
+        RuleList = { RuleList }
+    end
+    assert(typeof(RuleList) == "table", "Library:If - Conditions must be a table.")
+    if IsSingleConditionRule(RuleList) then
+        RuleList = { RuleList }
+    end
+    assert(#RuleList > 0, "Library:If - Conditions are empty.")
+
+    local Condition = {
+        Destroyed = false,
+
+        Targets = Targets,
+        Rules = RuleList,
+        Mode = string.lower(tostring(Config.Mode or "All")) == "any" and "Any" or "All",
+        Invert = Config.Invert == true,
+
+        Applied = {},
+    }
+
+    function Condition:Evaluate()
+        local IsAny = Condition.Mode == "Any"
+        local Final = not IsAny
+
+        for _, Rule in Condition.Rules do
+            local Result = EvaluateCondition(Rule)
+            if Result == nil then
+                return nil
+            end
+
+            if IsAny then
+                if Result then
+                    Final = true
+                end
+            elseif not Result then
+                Final = false
+            end
+        end
+
+        return Final
+    end
+
+    function Condition:Update()
+        if Condition.Destroyed then
+            return
+        end
+
+        local Met = Condition:Evaluate()
+        if Met == nil then
+            return
+        end
+
+        if Condition.Invert then
+            Met = not Met
+        end
+
+        local NeedSearchRefresh = false
+        for Index, Target in ipairs(Condition.Targets) do
+            local Resolved = ResolveConditionTarget(Target)
+            if Resolved == nil then
+                continue
+            end
+
+            local Entry = Condition.Applied[Index]
+            if Entry and Entry.Object == Resolved and Entry.Visible == Met then
+                continue
+            end
+
+            Condition.Applied[Index] = { Object = Resolved, Visible = Met }
+            if SetConditionTargetVisible(Resolved, Met) then
+                NeedSearchRefresh = true
+            end
+        end
+
+        if NeedSearchRefresh and Library.Searching then
+            Library:UpdateSearch(Library.SearchText)
+        end
+    end
+
+    function Condition:Refresh()
+        table.clear(Condition.Applied)
+        Condition:Update()
+    end
+
+    function Condition:Destroy()
+        Condition.Destroyed = true
+
+        local Idx = table.find(Library.Conditions, Condition)
+        if Idx then
+            table.remove(Library.Conditions, Idx)
+        end
+    end
+
+    table.insert(Library.Conditions, Condition)
+
+    if not ConditionConnection then
+        ConditionConnection = Library:GiveSignal(RunService.Heartbeat:Connect(function()
+            if Library.Unloaded then
+                return
+            end
+
+            for Index = #Library.Conditions, 1, -1 do
+                local Current = Library.Conditions[Index]
+                if not Current or Current.Destroyed then
+                    table.remove(Library.Conditions, Index)
+                else
+                    Current:Update()
+                end
+            end
+        end))
+    end
+
+    Condition:Update()
+    return Condition
+end
+
+function Library:UpdateConditions()
+    for _, Condition in Library.Conditions do
+        Condition:Refresh()
+    end
+end
+
+local SaveManager = {
+    Library = nil,
+
+    Folder = "ObsidianLibSettings",
+    SubFolder = "",
+
+    Ignore = {},
+    LoadingOrder = {},
+    UseLoadingOrder = false,
+
+    AutoloadConfig = nil
+}
+
+function SaveManager:SetLibrary(Library)
+    SaveManager.Library = Library
+end
+
+local SpecialValueParser = {
+    UDim2 = {
+        Encode = function(Value: UDim2)
+            return {
+                X = { Scale = Value.X.Scale, Offset = Value.X.Offset },
+                Y = { Scale = Value.Y.Scale, Offset = Value.Y.Offset }
+            }
+        end,
+
+        Decode = function(Data: any)
+            local DataType = typeof(Data)
+            if DataType == "table" then
+                return UDim2.new(Data.X.Scale, Data.X.Offset, Data.Y.Scale, Data.Y.Offset)
+            elseif DataType == "UDim2" then
+                return Data
+            end
+
+            return nil
+        end
+    }
+}
+
+local ElementParser = {}; do
+    local function CreateParser(
+        ElementType: string, 
+        LibaryIndex: string, 
+        
+        Save: (string, any, ...any) -> any, 
+        Load: (any?, any) -> any,
+        CustomElementFetcher: boolean?
+    )
+        ElementParser[ElementType] = { 
+            Save = function(Index: string, Element: any, ...)
+                local Data = Save(Index, Element, ...)
+                Data.type = ElementType
+                Data.idx = Index
+
+                return Data
+            end, 
+
+            Load = function(Index: string?, Data: any)
+                if CustomElementFetcher == true then
+                    return Load(nil, Data)
+                end
+
+                local Elements = SaveManager.Library and SaveManager.Library[LibaryIndex]
+                local Element = Elements and Elements[Index]
+                return Load(Element, Data)
+            end
+        }
+    end
+
+    CreateParser(
+        "Toggle", "Toggles",
+        function(Index: string, Toggle: any)
+            return { value = Toggle.Value }
+        end,
+        function(Element: any?, Data: any)
+            if not Element then return end
+            if Element.Value == Data.value then
+                Element:RunChanged()
+                return
+            end
+            
+            Element:SetValue(Data.value)
+        end
+    )
+
+    CreateParser(
+        "Slider", "Options",
+        function(Index: string, Slider: any)
+            return { value = tostring(Slider.Value) }
+        end,
+        function(Element: any?, Data: any)
+            if not Element then return end
+            if Element.Value == Data.value then
+                Element:RunChanged()
+                return
+            end
+
+            Element:SetValue(Data.value)
+        end
+    )
+
+    CreateParser(
+        "Dropdown", "Options",
+        function(Index: string, Dropdown: any)
+            return { value = Dropdown.Value, multi = Dropdown.Multi }
+        end,
+        function(Element: any?, Data: any)
+            if not Element then return end
+            if Element.Value == Data.value then
+                Element:RunChanged()
+                return
+            end
+            
+            Element:SetValue(Data.value)
+        end
+    )
+
+    CreateParser(
+        "ColorPicker", "Options",
+        function(Index: string, ColorPicker: any)
+            return { value = ColorPicker.Value:ToHex(), transparency = ColorPicker.Transparency }
+        end,
+        function(Element: any?, Data: any)
+            if not Element then return end
+            
+            Element:SetValueRGB(Color3.fromHex(Data.value), Data.transparency)
+        end
+    )
+
+    CreateParser(
+        "KeyPicker", "Options",
+        function(Index: string, KeyPicker: any)
+            return { mode = KeyPicker.Mode, key = KeyPicker.Value, modifiers = KeyPicker.Modifiers, toggled = KeyPicker.Toggled }
+        end,
+        function(Element: any?, Data: any)
+            if not Element then return end
+            
+            Element:SetValue({ Data.key, Data.mode, Data.modifiers })
+            if Data.mode == "Toggle" and Data.toggled ~= nil then
+                Element.Toggled = Data.toggled
+                Element:Update()
+            end
+        end
+    )
+
+    CreateParser(
+        "Input", "Options",
+        function(Index: string, Input: any)
+            return { text = Input.Value }
+        end,
+        function(Element: any?, Data: any)
+            if not Element then return end
+            if typeof(Data.text) ~= "string" then return end
+
+            if Element.Value == Data.text then
+                Element:RunChanged()
+                return
+            end
+
+            Element:SetValue(Data.text)
+        end
+    )
+
+    CreateParser(
+        "Groupbox", "Tabs",
+        function(Index: string, Groupbox: any, TabIndex: string)
+            return {
+                tabIdx = TabIndex,
+                collapsed = Groupbox.Collapsed,
+                poppedOut = Groupbox.PoppedOut == true,
+                popoutPos = if Groupbox.PoppedOut and Groupbox.PopOutFloat then SpecialValueParser.UDim2.Encode(Groupbox.PopOutFloat.Position) else nil,
+            }
+        end,
+        function(_, Data: any)
+            local TabIndex, Index = Data.tabIdx, Data.idx
+            if typeof(TabIndex) ~= "string" or typeof(Index) ~= "string" then return end
+
+            local Tabs = SaveManager.Library and SaveManager.Library.Tabs
+            local Tab = Tabs and Tabs[TabIndex]
+            if not Tab then return end
+
+            local Groupbox = Tab.Groupboxes[Index]
+            if not Groupbox then return end
+
+            if Groupbox.Collapsed ~= Data.collapsed then
+                Groupbox:SetCollapsed(Data.collapsed == true)
+            end
+
+            if Groupbox.PopOutEnabled then
+                if Data.poppedOut == true then
+                    local Position = SpecialValueParser.UDim2.Decode(Data.popoutPos)
+                    Groupbox:SetPoppedOut(true, Position)
+                elseif Groupbox.PoppedOut then
+                    Groupbox:SetPoppedOut(false)
+                end
+            end
+        end,
+        true
+    )
+
+    CreateParser(
+        "Tabbox", "Tabs",
+        function(Index: string, Tabbox: any, TabIndex: string)
+            return {
+                tabIdx = TabIndex,
+                poppedOut = Tabbox.PoppedOut == true,
+                popoutPos = if Tabbox.PoppedOut and Tabbox.PopOutFloat then SpecialValueParser.UDim2.Encode(Tabbox.PopOutFloat.Position) else nil,
+            }
+        end,
+        function(_, Data: any)
+            local TabIndex, Index = Data.tabIdx, Data.idx
+            if typeof(TabIndex) ~= "string" or typeof(Index) ~= "string" then return end
+
+            local Tabs = SaveManager.Library and SaveManager.Library.Tabs
+            local Tab = Tabs and Tabs[TabIndex]
+            if not Tab then return end
+
+            local Tabbox = Tab.Tabboxes and Tab.Tabboxes[Index]
+            if not Tabbox then return end
+
+            if Tabbox.PopOutEnabled then
+                if Data.poppedOut == true then
+                    local Position = SpecialValueParser.UDim2.Decode(Data.popoutPos)
+                    Tabbox:SetPoppedOut(true, Position)
+                elseif Tabbox.PoppedOut then
+                    Tabbox:SetPoppedOut(false)
+                end
+            end
+        end,
+        true
+    )
+end
+
+local function Trim(Text: string)
+    return Text:match("^%s*(.-)%s*$")
+end
+
+local function IsStringEmpty(String: string): boolean
+    return if typeof(String) == "string" then Trim(String) == "" else true
+end
+
+local function IsValidFolderPath(Name: string): boolean
+    return typeof(Name) == "string" and (
+        Trim(Name) ~= "" and 
+        not Name:match("^%s*$") and 
+        not Name:find('[<>:"|%?%*%z]')
+    )
+end
+
+local function SplitPath(Path: string): {string}
+    local Result = {}
+    local Current = ""
+
+    for Part in string.gmatch(Path, "[^/]+") do
+        Current = if Current == "" then Part else (Current .. "/" .. Part)
+        table.insert(Result, Current)
+    end
+
+    return Result
+end
+
+local function GetFolderPath(): false | string
+    if IsStringEmpty(SaveManager.Folder) then
+        return false
+    end
+
+    return string.format("%s/settings", SaveManager.Folder)
+end
+
+local function GetSubFolderPath(): false | string
+    if IsStringEmpty(SaveManager.Folder) or IsStringEmpty(SaveManager.SubFolder) then
+        return false
+    end
+
+    return string.format("%s/settings/%s", SaveManager.Folder, SaveManager.SubFolder)
+end
+
+local function GetCurrentSettingsPath(): false | string
+    local SubFolderPath = GetSubFolderPath()
+    return if SubFolderPath == false then GetFolderPath() else SubFolderPath
+end
+
+local function GetConfigPath(ConfigName: string): false | string
+    local CurrentSettingsPath = GetCurrentSettingsPath()
+    return if CurrentSettingsPath == false then false else string.format("%s/%s.json", CurrentSettingsPath, ConfigName)
+end
+
+local function DoesConfigExist(ConfigName: string): boolean
+    local ConfigPath = GetConfigPath(ConfigName)
+    return if ConfigPath == false then false else isfile(ConfigPath)
+end
+
+local function GetAutoloadPath(): false | string
+    local CurrentSettingsPath = GetCurrentSettingsPath()
+    return if CurrentSettingsPath == false then false else string.format("%s/autoload.txt", CurrentSettingsPath)
+end
+
+function SaveManager:SetLoadingOrder(Enabled: boolean, Order: {string}?)
+    SaveManager.UseLoadingOrder = Enabled == true
+    SaveManager.LoadingOrder = typeof(Order) == "table" and Order or SaveManager.LoadingOrder
+end
+
+function SaveManager:SetIgnoreIndexes(Indexes: {string}?)
+    assert(typeof(Indexes) == "table", "Expected table, got " .. typeof(Indexes))
+
+    for _, Index in Indexes do
+        SaveManager.Ignore[Index] = true
+    end
+end
+
+function SaveManager:IgnoreThemeSettings()
+    SaveManager:SetIgnoreIndexes({
+        "BackgroundColor", "MainColor", "AccentColor", "OutlineColor", "FontColor", "FontFace", "BackgroundImage",
+        "ThemeManager_ThemeList", "ThemeManager_CustomThemeList", "ThemeManager_CustomThemeName", "ThemeManager_ThemeJSON"
+    })
+end
+
+function SaveManager:GetPaths(): {string}
+    local SubFolderPath = GetSubFolderPath()
+    if SubFolderPath == false then
+        local FolderPath = GetFolderPath()
+        return if FolderPath == false then {} else SplitPath(FolderPath)
+    end
+
+    return SplitPath(SubFolderPath)
+end
+
+function SaveManager:BuildFolderTree(SkipWhenCreated: boolean?)
+    local Paths = SaveManager:GetPaths()
+    if #Paths == 0 then
+        return false
+    end
+
+    if SkipWhenCreated == true then
+        if isfolder(Paths[1]) then
+            return true
+        end
+    end
+
+    for _, Path in Paths do
+        if isfolder(Path) then continue end
+        
+        makefolder(Path)
+    end
+
+    return true
+end
+
+function SaveManager:CheckFolderTree()
+    return SaveManager:BuildFolderTree(true)
+end
+
+function SaveManager:CheckSubFolder(CreateFolder: boolean)
+    local SubFolderPath = GetSubFolderPath()
+    if SubFolderPath == false then
+        return false
+    end
+
+    local FolderExists = isfolder(SubFolderPath)
+    if not CreateFolder then
+        return FolderExists
+    end
+
+    makefolder(SubFolderPath)
+    return true
+end
+
+function SaveManager:SetFolder(Folder: string)
+    assert(IsValidFolderPath(Folder), "Invalid path provided")
+
+    SaveManager.Folder = Folder
+    SaveManager:BuildFolderTree()
+end
+
+function SaveManager:SetSubFolder(SubFolder: string)
+    assert(IsValidFolderPath(SubFolder), "Invalid path provided")
+
+    SaveManager.SubFolder = SubFolder
+    SaveManager:BuildFolderTree()
+end
+
+function SaveManager:RefreshConfigList()
+    local SettingsPath = GetCurrentSettingsPath()
+    if SettingsPath == false then
+        return {}
+    end
+
+    local SuccessList, Files = pcall(listfiles, SettingsPath)
+    if not (SuccessList and typeof(Files) == "table") then
+        SaveManager.Library:Notify(string.format("Failed to load config list: %s", tostring(Files)))
+        return {}
+    end
+
+    local FileNames = {}
+    for _, FilePath in Files do
+        local RawFileName = FilePath:match("(.+)%..+$")
+        if not RawFileName then continue end
+
+        local Position = RawFileName:gsub("\\", "/"):find("/[^/]*$")
+        local FileName = Position and RawFileName:sub(Position + 1) or RawFileName
+        if not FileName or FileName == "autoload" then continue end
+
+        table.insert(FileNames, FileName)
+    end
+
+    return FileNames
+end
+
+function SaveManager:SaveJSON(ConfigName)
+    local Library = SaveManager.Library
+    local IgnoreIndexes = SaveManager.Ignore
+    local CurrentData = {
+        timestamp = os.date("%d.%m.%Y %H:%M:%S"),
+        name = ConfigName or "",
+
+        objects = {},
+        keybindMenu = if Library.KeybindFrame then {
+            visible = Library.KeybindFrame.Visible,
+            position = SpecialValueParser.UDim2.Encode(Library.KeybindFrame.Position)
+        } else nil
+    }
+
+    for Index, Toggle in Library.Toggles do
+        if not Toggle.Type then continue end
+        if IgnoreIndexes[Index] then continue end
+
+        local Parser = ElementParser[Toggle.Type]
+        if not Parser then continue end
+
+        table.insert(CurrentData.objects, Parser.Save(Index, Toggle))
+    end
+
+    for Index, Option in Library.Options do
+        if not Option.Type then continue end
+        if IgnoreIndexes[Index] then continue end
+
+        local Parser = ElementParser[Option.Type]
+        if not Parser then continue end
+
+        table.insert(CurrentData.objects, Parser.Save(Index, Option))
+    end
+
+    for TabIndex, Tab in Library.Tabs do
+        if Tab.Groupboxes then
+            for Index, Groupbox in Tab.Groupboxes do
+                if typeof(Index) ~= "string" or IgnoreIndexes[Index] then continue end
+
+                local Parser = ElementParser.Groupbox
+                if not Parser then continue end
+
+                table.insert(CurrentData.objects, Parser.Save(Index, Groupbox, TabIndex))
+            end
+        end
+
+        if Tab.Tabboxes then
+            for Index, Tabbox in Tab.Tabboxes do
+                if typeof(Index) ~= "string" or IgnoreIndexes[Index] then continue end
+
+                local Parser = ElementParser.Tabbox
+                if not Parser then continue end
+
+                table.insert(CurrentData.objects, Parser.Save(Index, Tabbox, TabIndex))
+            end
+        end
+    end
+
+    local SuccessEncode, EncodedData = pcall(HttpService.JSONEncode, HttpService, CurrentData)
+    if not SuccessEncode then
+        return "", false, "Failed to encode data"
+    end
+
+    return EncodedData, true
+end
+
+function SaveManager:Save(ConfigName: string): (boolean, string?)
+    if IsStringEmpty(ConfigName) then
+        return false, "Invalid config name provided"
+    end
+
+    if string.lower(ConfigName) == "autoload" then
+        return false, "Invalid config name provided"
+    end
+
+    local ConfigPath = GetConfigPath(ConfigName)
+    if ConfigPath == false then
+        return false, "Invalid config name provided"
+    end
+
+    SaveManager:CheckFolderTree()
+
+    local EncodedData, SuccessEncode, EncodeErrorMessage = SaveManager:SaveJSON(ConfigName)
+    if not SuccessEncode then
+        return false, EncodeErrorMessage
+    end
+
+    local SuccessWrite, ErrorMessage = pcall(writefile, ConfigPath, EncodedData)
+    if not SuccessWrite then
+        return false, "Failed to write config file: " .. tostring(ErrorMessage)
+    end
+
+    return true
+end
+
+function SaveManager:LoadJSON(Content: string)
+    if IsStringEmpty(Content) then
+        return false, "No JSON provided"
+    end
+
+    local SuccessDecode, Decoded = pcall(HttpService.JSONDecode, HttpService, Content)
+    if not SuccessDecode or typeof(Decoded) ~= "table" or typeof(Decoded.objects) ~= "table" then
+        return false, "Failed to decode config data"
+    end
+
+    local Library = SaveManager.Library
+    local LoadingOrder = SaveManager.LoadingOrder
+    local IgnoreIndexes = SaveManager.Ignore
+
+    if SaveManager.UseLoadingOrder == true and typeof(LoadingOrder) == "table" then
+        table.sort(Decoded.objects, function(a, b)
+            local aIndex = table.find(LoadingOrder, a.type) or math.huge
+            local bIndex = table.find(LoadingOrder, b.type) or math.huge
+            return aIndex < bIndex
+        end)
+    end
+
+    if Library.KeybindFrame and typeof(Decoded.keybindMenu) == "table" then
+        local KeybindFrameData = Decoded.keybindMenu
+        local IsVisible = KeybindFrameData.visible == true
+        local Position = SpecialValueParser.UDim2.Decode(KeybindFrameData.position)
+
+        Library.KeybindFrame.Visible = IsVisible
+        Library.KeybindFrame.Position = Position or Library.KeybindFrame.Position
+        
+        local KeybindMenuToggle = Library.Options and Library.Options.KeybindMenuOpen
+        if KeybindMenuToggle then
+            KeybindMenuToggle:SetValue(IsVisible)
+        end
+    end
+
+    for _, Option in Decoded.objects do
+        if not Option.type then continue end
+        if IgnoreIndexes[Option.idx] then continue end
+
+        local Parser = ElementParser[Option.type]
+        if not Parser then continue end
+
+        task.defer(Parser.Load, Option.idx, Option)
+    end
+
+    return true
+end
+
+function SaveManager:Load(ConfigName: string): (boolean, string?)
+    if IsStringEmpty(ConfigName) then
+        return false, "No config is selected"
+    end
+
+    local ConfigPath = GetConfigPath(ConfigName)
+    if ConfigPath == false or not isfile(ConfigPath) then
+        return false, "Config file does not exist"
+    end
+
+    local SuccessRead, Content = pcall(readfile, ConfigPath)
+    if not SuccessRead then
+        return false, "Failed to read config file"
+    end
+
+    return SaveManager:LoadJSON(Content)
+end
+
+function SaveManager:Delete(ConfigName: string): (boolean | string?)
+    if IsStringEmpty(ConfigName) then
+        return false, "No config is selected"
+    end
+
+    local ConfigPath = GetConfigPath(ConfigName)
+    if ConfigPath == false or not isfile(ConfigPath) then
+        return false, "Config file does not exist"
+    end
+
+    local SuccessDelete, ErrorMessage = pcall(delfile, ConfigPath)
+    if not SuccessDelete then
+        return false, "Failed to delete config file: " .. tostring(ErrorMessage)
+    end
+
+    if ConfigName == SaveManager.AutoloadConfig then
+        SaveManager:DeleteAutoLoadConfig()
+    end
+
+    return true
+end
+
+function SaveManager:GetAutoloadConfig(): (string, boolean, string?)
+    SaveManager:CheckFolderTree()
+
+    local AutoloadPath = GetAutoloadPath()
+    if AutoloadPath == false then
+        return "none", false, "Invalid path provided"
+    end
+
+    if not isfile(AutoloadPath) then
+        return "none", false, "Autoload config is not set"
+    end
+
+    local SuccessRead, AutoloadConfigName = pcall(readfile, AutoloadPath)
+    if not (SuccessRead and typeof(AutoloadConfigName) == "string") then
+        return "none", false, AutoloadConfigName
+    end
+
+    local ConfigExists = DoesConfigExist(AutoloadConfigName)
+    if not ConfigExists then
+        return "none", false, "Config file not found"
+    end
+
+    SaveManager.AutoloadConfig = AutoloadConfigName
+    return AutoloadConfigName, true
+end
+
+function SaveManager:SaveAutoloadConfig(ConfigName: string): (boolean, string?)
+    if IsStringEmpty(ConfigName) then
+        return false, "No config is selected"
+    end
+
+    SaveManager:CheckFolderTree()
+
+    local AutoloadPath = GetAutoloadPath()
+    if AutoloadPath == false then
+        return false, "Invalid path provided"
+    end
+
+    if not DoesConfigExist(ConfigName) then
+        return false, "Config does not exist"
+    end
+
+    local SuccessWrite, ErrorMessage = pcall(writefile, AutoloadPath, ConfigName)
+    if not SuccessWrite then
+        return false, ErrorMessage
+    end
+
+    SaveManager.AutoloadConfig = ConfigName
+    return true
+end
+
+function SaveManager:LoadAutoloadConfig()
+    local ConfigName, Success, FetchErrorMessage = SaveManager:GetAutoloadConfig()
+    if not Success or FetchErrorMessage then
+        if FetchErrorMessage ~= "Autoload config is not set" then
+            SaveManager.Library:Notify(string.format("Failed to load autoload config: %s", FetchErrorMessage))
+        end
+
+        return
+    end
+
+    local SuccessLoad, LoadErrorMessage = SaveManager:Load(ConfigName)
+    if not SuccessLoad then
+        SaveManager.Library:Notify(string.format("Failed to load autoload config: %s", LoadErrorMessage))
+        return
+    end
+
+    SaveManager.Library:Notify(string.format("Successfully loaded autoload config %q", ConfigName))
+end
+
+function SaveManager:DeleteAutoLoadConfig(): (boolean, string?)
+    SaveManager:CheckFolderTree()
+
+    local AutoloadPath = GetAutoloadPath()
+    if AutoloadPath == false then
+        return false, "Invalid path provided"
+    end
+
+    if not isfile(AutoloadPath) then
+        return false, "Autoload config is not set"
+    end
+
+    local SuccessDelete, ErrorMessage = pcall(delfile, AutoloadPath)
+    if not SuccessDelete then
+        return false, ErrorMessage
+    end
+
+    SaveManager.AutoloadConfig = nil
+    return true
+end
+
+local function ShowDialog(
+    Condition: () -> boolean,
+
+    Index: string, 
+    Title: string, 
+    Description: string,
+
+    DestructiveText: string,
+    DestructiveAction: () -> nil
+)
+    if Condition() == false then
+        return DestructiveAction()
+    end
+
+    return SaveManager.Library.Window:AddDialog(Index, {
+        Title = Title,
+        Description = Description,
+        AutoDismiss = false,
+
+        FooterButtons = {
+            Cancel = {
+                Title = "Cancel",
+                Variant = "Ghost",
+                Order = 1,
+                Callback = function(Dialog)
+                    Dialog:Dismiss()
+                end
+            },
+
+            DestructiveAction = {
+                Title = DestructiveText,
+                Variant = "Destructive",
+                Order = 2,
+                Callback = function(Dialog)
+                    Dialog:Dismiss()
+                    DestructiveAction()
+                end
+            }
+        }
+    })
+end
+
+function SaveManager:BuildConfigSection(Tab: any, IconName: string)
+    assert(SaveManager.Library, "Library is not set, call SaveManager:SetLibrary(Library) first.")
+    local ConfigurationBox = Tab:AddGroupbox({
+        Side = "Right",
+        Name = "Configuration",
+        IconName = IconName or "folder-cog",
+    })
+
+    local ConfigNameInput, ConfigList, ConfigJSONInput, AutoloadConfigLabel
+    local function RefreshList()
+        ConfigList:SetValues(SaveManager:RefreshConfigList())
+        ConfigList:SetValue(nil)
+    end
+
+    local function RefreshAutoloadConfigLabel()
+        local AutoloadConfigName, _Success, _ErrorMessage = SaveManager:GetAutoloadConfig()
+
+        AutoloadConfigLabel:SetText(string.format("Current autoload config: %s", AutoloadConfigName))
+        if ConfigList then RefreshList() end
+    end
+
+    ConfigurationBox:AddInput("SaveManager_ConfigName", {
+        Text = "Config name"
+    })
+
+    ConfigurationBox:AddButton("Create config", function()
+        local ConfigName = ConfigNameInput.Value
+        if IsStringEmpty(ConfigName) then
+            SaveManager.Library:Notify("Configuration name cannot be empty.")
+            return
+        end
+
+        if string.lower(ConfigName) == "autoload" then
+            SaveManager.Library:Notify("Invalid config name provided.")
+            return
+        end
+        
+        ShowDialog(
+            function(): boolean
+                return DoesConfigExist(ConfigName)
+            end,
+
+            "SaveManager_CreateConfig",
+            "Config already exists",
+            string.format("A config named %q already exists. Overwriting will replace it with your current settings.", ConfigName),
+
+            "Overwrite",
+            function()
+                local Success, ErrorMessage = SaveManager:Save(ConfigName)
+                if not Success then
+                    SaveManager.Library:Notify(string.format("Failed to create config %q: %s", ConfigName, ErrorMessage))
+                    return
+                end
+
+                SaveManager.Library:Notify(string.format("Successfully created config %q", ConfigName))
+                RefreshList()
+            end
+        )
+    end)
+
+    ConfigurationBox:AddDivider()
+
+    ConfigurationBox:AddDropdown("SaveManager_ConfigList", {
+        Text = "Config list",
+
+        Values = SaveManager:RefreshConfigList(),
+        AllowNull = true,
+        Multi = false,
+
+        FormatDisplayValue = function(Value: any)
+            if Value == SaveManager.AutoloadConfig then
+                return string.format("%s (autoload)", Value)
+            end
+
+            return Value
+        end,
+        FormatListValue = function(Value: any)
+            if Value == SaveManager.AutoloadConfig then
+                return string.format("%s (autoload)", Value)
+            end
+
+            return Value
+        end
+    })
+
+    ConfigurationBox:AddButton({
+        Text = "Load config",
+        DoubleClick = false,
+
+        Func = function()
+            local ConfigName = ConfigList.Value
+            if IsStringEmpty(ConfigName) then
+                SaveManager.Library:Notify("Please select a config first.")
+                return
+            end
+
+            ShowDialog(
+                function(): boolean
+                    return true
+                end,
+
+                "SaveManager_LoadConfig",
+                "Load config",
+                string.format("Are you sure you want to load %q? Your current settings will be overwritten.", ConfigName),
+
+                "Load",
+                function()
+                    local Success, ErrorMessage = SaveManager:Load(ConfigName)
+                    if not Success then
+                        SaveManager.Library:Notify(string.format("Failed to load config %q: %s", ConfigName, ErrorMessage))
+                        return
+                    end
+
+                    SaveManager.Library:Notify(string.format("Successfully loaded config %q", ConfigName))
+                end
+            )
+        end
+    })
+    
+    ConfigurationBox:AddButton({
+        Text = "Overwrite config",
+        DoubleClick = false,
+
+        Func = function()
+            local ConfigName = ConfigList.Value
+            if IsStringEmpty(ConfigName) then
+                SaveManager.Library:Notify("Please select a config first.")
+                return
+            end
+
+            ShowDialog(
+                function(): boolean
+                    return true
+                end,
+
+                "SaveManager_OverwriteConfig",
+                "Overwrite config",
+                string.format("Are you sure you want to overwrite %q with your current settings? This cannot be undone.", ConfigName),
+
+                "Overwrite",
+                function()
+                    local Success, ErrorMessage = SaveManager:Save(ConfigName)
+                    if not Success then
+                        SaveManager.Library:Notify(string.format("Failed to overwrite config %q: %s", ConfigName, ErrorMessage))
+                        return
+                    end
+
+                    SaveManager.Library:Notify(string.format("Successfully overwrote config %q", ConfigName))
+                end
+            )
+        end
+    })
+
+    ConfigurationBox:AddButton({
+        Text = "Delete config",
+        DoubleClick = false,
+
+        Func = function()
+            local ConfigName = ConfigList.Value
+            if IsStringEmpty(ConfigName) then
+                SaveManager.Library:Notify("Please select a config first.")
+                return
+            end
+
+            ShowDialog(
+                function(): boolean
+                    return true
+                end,
+
+                "SaveManager_DeleteConfig",
+                "Delete config",
+                string.format("Are you sure you want to delete %q? This cannot be undone.", ConfigName),
+                
+                "Delete",
+                function()
+                    local Success, ErrorMessage = SaveManager:Delete(ConfigName)
+                    if not Success then
+                        SaveManager.Library:Notify(string.format("Failed to delete config %q: %s", ConfigName, ErrorMessage))
+                        return
+                    end
+
+                    SaveManager.Library:Notify(string.format("Successfully deleted config %q", ConfigName))
+                    RefreshAutoloadConfigLabel()
+                end
+            )
+        end
+    })
+
+    ConfigurationBox:AddButton("Refresh list", RefreshList)
+
+    ConfigurationBox:AddButton({
+        Text = "Set as autoload",
+        DoubleClick = false,
+
+        Func = function()
+            local ConfigName = ConfigList.Value
+            if IsStringEmpty(ConfigName) then
+                SaveManager.Library:Notify("Please select a config first.")
+                return
+            end
+
+            local Success, ErrorMessage = SaveManager:SaveAutoloadConfig(ConfigName)
+            if not Success then
+                SaveManager.Library:Notify(string.format("Failed to set autoload config %q: %s", ConfigName, ErrorMessage))
+                return
+            end
+
+            SaveManager.Library:Notify(string.format("Successfully set autoload config to %q", ConfigName))
+            RefreshAutoloadConfigLabel()
+        end
+    })
+
+    ConfigurationBox:AddButton({
+        Text = "Reset autoload",
+        DoubleClick = false,
+
+        Func = function()
+            ShowDialog(
+                function(): boolean
+                    return true
+                end,
+
+                "SaveManager_ResetAutoload",
+                "Reset autoload config",
+                "Are you sure you want to clear the autoload config? No config will be loaded automatically on next launch.",
+                
+                "Reset",
+                function()
+                    local Success, ErrorMessage = SaveManager:DeleteAutoLoadConfig()
+                    if not Success then
+                        SaveManager.Library:Notify(string.format("Failed to reset autoload config: %s", ErrorMessage))
+                        return
+                    end
+
+                    SaveManager.Library:Notify("Successfully reset autoload config.")
+                    RefreshAutoloadConfigLabel()
+                end
+            )
+        end
+    })
+
+    AutoloadConfigLabel = ConfigurationBox:AddLabel("Current autoload config: ...", true);
+
+    ConfigurationBox:AddDivider()
+
+    ConfigurationBox:AddInput("SaveManager_JSON", {
+        Text = "Config JSON"
+    })
+
+    ConfigurationBox:AddButton("Import config", function()
+        local ConfigJSON = ConfigJSONInput.Value
+        if IsStringEmpty(ConfigJSON) then
+            SaveManager.Library:Notify("Configuration JSON cannot be empty")
+            return
+        end
+
+        ShowDialog(
+            function(): boolean
+                return true
+            end,
+
+            "SaveManager_ImportConfig",
+            "Import config",
+            "Are you sure you want to import this configuration? Your current settings will be overwritten.",
+
+            "Import",
+            function()
+                local Success, ErrorMessage = SaveManager:LoadJSON(ConfigJSON)
+                if not Success then
+                    SaveManager.Library:Notify(string.format("Failed to import config: %s", ErrorMessage))
+                    return
+                end
+
+                SaveManager.Library:Notify("Successfully imported config")
+            end
+        )
+    end)
+
+    ConfigurationBox:AddButton("Export current config", function()
+        local EncodedData, Success, ErrorMessage = SaveManager:SaveJSON()
+        if not Success  then
+            SaveManager.Library:Notify(ErrorMessage)
+            return
+        end
+
+        ConfigJSONInput:SetValue(EncodedData)
+        if setclipboard then
+            setclipboard(EncodedData)
+            SaveManager.Library:Notify("Copied config to your clipboard")
+        end
+    end)
+
+    ConfigNameInput, ConfigList, ConfigJSONInput =
+        SaveManager.Library.Options.SaveManager_ConfigName, 
+        SaveManager.Library.Options.SaveManager_ConfigList,
+        SaveManager.Library.Options.SaveManager_JSON;
+
+    RefreshAutoloadConfigLabel()
+    SaveManager:SetIgnoreIndexes({ "SaveManager_ConfigList", "SaveManager_ConfigName", "SaveManager_JSON" })
+
+    return ConfigurationBox
+end
+
+local ContrastWarnThreshold = 4.5
+local SrgbLinearThreshold = 0.03928
+local SrgbLinearDivisor = 12.92
+local SrgbGammaOffset = 0.055
+local SrgbGammaScale = 1.055
+local SrgbGammaExponent = 2.4
+local LuminanceRedWeight,
+      LuminanceGreenWeight,
+      LuminanceBlueWeight = 0.2126, 0.7152, 0.0722
+local ContrastRatioOffset = 0.05
+
+local SchemeIndexes = { "FontColor", "MainColor", "AccentColor", "BackgroundColor", "OutlineColor" }
+
+local ThemeManager = {
+    Library = nil,
+
+    Folder = "ObsidianLibSettings",
+
+    AppliedToTab = false,
+    DefaultThemeName = nil,
+
+    ContrastLabel = nil,
+    ContrastWasPoor = false,
+
+    BuiltInThemes = {
+        ["Default"] = {
+            1,
+            { FontColor = "ffffff", MainColor = "191919", AccentColor = "7d55ff", BackgroundColor = "0f0f0f", OutlineColor = "282828", BackgroundImage = "" },
+        },
+        ["BBot"] = {
+            2,
+            { FontColor = "ffffff", MainColor = "1e1e1e", AccentColor = "7e48a3", BackgroundColor = "232323", OutlineColor = "141414", BackgroundImage = "" },
+        },
+        ["Fatality"] = {
+            3,
+            { FontColor = "ffffff", MainColor = "1e1842", AccentColor = "c50754", BackgroundColor = "191335", OutlineColor = "3c355d", BackgroundImage = "" },
+        },
+        ["Jester"] = {
+            4,
+            { FontColor = "ffffff", MainColor = "242424", AccentColor = "db4467", BackgroundColor = "1c1c1c", OutlineColor = "373737", BackgroundImage = "" },
+        },
+        ["Mint"] = {
+            5,
+            { FontColor = "ffffff", MainColor = "242424", AccentColor = "3db488", BackgroundColor = "1c1c1c", OutlineColor = "373737", BackgroundImage = "" },
+        },
+        ["Tokyo Night"] = {
+            6,
+            { FontColor = "ffffff", MainColor = "191925", AccentColor = "6759b3", BackgroundColor = "16161f", OutlineColor = "323232", BackgroundImage = "" },
+        },
+        ["Ubuntu"] = {
+            7,
+            { FontColor = "ffffff", MainColor = "3e3e3e", AccentColor = "e2581e", BackgroundColor = "323232", OutlineColor = "191919", BackgroundImage = "" },
+        },
+        ["Quartz"] = {
+            8,
+            { FontColor = "ffffff", MainColor = "232330", AccentColor = "426e87", BackgroundColor = "1d1b26", OutlineColor = "27232f", BackgroundImage = "" },
+        },
+        ["Nord"] = {
+            9,
+            { FontColor = "eceff4", MainColor = "3b4252", AccentColor = "88c0d0", BackgroundColor = "2e3440", OutlineColor = "4c566a", BackgroundImage = "" },
+        },
+        ["Dracula"] = {
+            10,
+            { FontColor = "f8f8f2", MainColor = "44475a", AccentColor = "ff79c6", BackgroundColor = "282a36", OutlineColor = "6272a4", BackgroundImage = "" },
+        },
+        ["Monokai"] = {
+            11,
+            { FontColor = "f8f8f2", MainColor = "272822", AccentColor = "f92672", BackgroundColor = "1e1f1c", OutlineColor = "49483e", BackgroundImage = "" },
+        },
+        ["Gruvbox"] = {
+            12,
+            { FontColor = "ebdbb2", MainColor = "3c3836", AccentColor = "fb4934", BackgroundColor = "282828", OutlineColor = "504945", BackgroundImage = "" },
+        },
+        ["Solarized"] = {
+            13,
+            { FontColor = "839496", MainColor = "073642", AccentColor = "cb4b16", BackgroundColor = "002b36", OutlineColor = "586e75", BackgroundImage = "" },
+        },
+        ["Catppuccin"] = {
+            14,
+            { FontColor = "d9e0ee", MainColor = "302d41", AccentColor = "f5c2e7", BackgroundColor = "1e1e2e", OutlineColor = "575268", BackgroundImage = "" },
+        },
+        ["One Dark"] = {
+            15,
+            { FontColor = "abb2bf", MainColor = "282c34", AccentColor = "c678dd", BackgroundColor = "21252b", OutlineColor = "5c6370", BackgroundImage = "" },
+        },
+        ["Cyberpunk"] = {
+            16,
+            { FontColor = "f9f9f9", MainColor = "262335", AccentColor = "00ff9f", BackgroundColor = "1a1a2e", OutlineColor = "413c5e", BackgroundImage = "" },
+        },
+        ["Oceanic Next"] = {
+            17,
+            { FontColor = "d8dee9", MainColor = "1b2b34", AccentColor = "6699cc", BackgroundColor = "16232a", OutlineColor = "343d46", BackgroundImage = "" },
+        },
+        ["Material"] = {
+            18,
+            { FontColor = "eeffff", MainColor = "212121", AccentColor = "82aaff", BackgroundColor = "151515", OutlineColor = "424242", BackgroundImage = "" },
+        }
+    }
+}
+
+function ThemeManager:SetLibrary(Library)
+    ThemeManager.Library = Library
+end
+
+local function LinearizeChannel(Channel: number): number
+    if Channel <= SrgbLinearThreshold then
+        return Channel / SrgbLinearDivisor
+    end
+
+    return ((Channel + SrgbGammaOffset) / SrgbGammaScale) ^ SrgbGammaExponent
+end
+
+local function GetRelativeLuminance(Color: Color3): number
+    local R = LinearizeChannel(Color.R)
+    local G = LinearizeChannel(Color.G)
+    local B = LinearizeChannel(Color.B)
+
+    return LuminanceRedWeight * R + LuminanceGreenWeight * G + LuminanceBlueWeight * B
+end
+
+local function GetContrastRatio(ColorA: Color3, ColorB: Color3): number
+    local LuminanceA = GetRelativeLuminance(ColorA)
+    local LuminanceB = GetRelativeLuminance(ColorB)
+
+    local Lighter = math.max(LuminanceA, LuminanceB)
+    local Darker = math.min(LuminanceA, LuminanceB)
+
+    return (Lighter + ContrastRatioOffset) / (Darker + ContrastRatioOffset)
+end
+
+local function IsValidThemeData(Data: any): boolean
+    if typeof(Data) ~= "table" then
+        return false
+    end
+
+    for _, SchemeIndex in SchemeIndexes do
+        if typeof(Data[SchemeIndex]) ~= "string" then
+            return false
+        end
+    end
+
+    return true
+end
+
+local function GetFolderPath(): false | string
+    if IsStringEmpty(ThemeManager.Folder) then
+        return false
+    end
+
+    return string.format("%s/themes", ThemeManager.Folder)
+end
+
+local GetCurrentThemesPath = GetFolderPath
+
+local function GetThemePath(ThemeName: string): false | string
+    local CurrentThemesPath = GetCurrentThemesPath()
+    return if CurrentThemesPath == false then false else string.format("%s/%s.json", CurrentThemesPath, ThemeName)
+end
+
+local function DoesThemeExist(ThemeName: string, IncludeBuiltIn: boolean): boolean
+    if ThemeManager.BuiltInThemes[ThemeName] then
+        return true
+    end
+
+    local ThemePath = GetThemePath(ThemeName)
+    return if ThemePath == false then false else isfile(ThemePath)
+end
+
+local function GetDefaultThemePath(): false | string
+    local CurrentThemesPath = GetCurrentThemesPath()
+    return if CurrentThemesPath == false then false else string.format("%s/default.txt", CurrentThemesPath)
+end
+
+function ThemeManager:GetPaths(): {string}
+    local FolderPath = GetFolderPath()
+    return if FolderPath == false then {} else SplitPath(FolderPath)
+end
+
+function ThemeManager:BuildFolderTree(SkipWhenCreated: boolean?)
+    local Paths = ThemeManager:GetPaths()
+    if #Paths == 0 then
+        return false
+    end
+
+    if SkipWhenCreated == true then
+        if isfolder(Paths[1]) then
+            return true
+        end
+    end
+
+    for _, Path in Paths do
+        if isfolder(Path) then continue end
+        
+        makefolder(Path)
+    end
+
+    return true
+end
+
+function ThemeManager:CheckFolderTree()
+    return ThemeManager:BuildFolderTree(true)
+end
+
+function ThemeManager:SetFolder(Folder: string)
+    assert(IsValidFolderPath(Folder), "Invalid path provided")
+
+    ThemeManager.Folder = Folder
+    ThemeManager:BuildFolderTree()
+end
+
+function ThemeManager:ReloadCustomThemes()
+    local SettingsPath = GetCurrentThemesPath()
+    if SettingsPath == false then
+        return {}
+    end
+
+    local SuccessList, Files = pcall(listfiles, SettingsPath)
+    if not (SuccessList and typeof(Files) == "table") then
+        ThemeManager.Library:Notify(string.format("Failed to load theme list: %s", tostring(Files)))
+        return {}
+    end
+
+    local FileNames = {}
+    for _, FilePath in Files do
+        local RawFileName = FilePath:match("(.+)%..+$")
+        if not RawFileName then continue end
+
+        local Position = RawFileName:gsub("\\", "/"):find("/[^/]*$")
+        local FileName = Position and RawFileName:sub(Position + 1) or RawFileName
+        if not FileName or FileName == "default" then continue end
+
+        table.insert(FileNames, FileName)
+    end
+
+    return FileNames
+end
+
+function ThemeManager:GetCustomTheme(ThemeName: string): any
+    if IsStringEmpty(ThemeName) then
+        return nil
+    end
+
+    local ThemePath = GetThemePath(ThemeName)
+    if ThemePath == false or not isfile(ThemePath) then
+        return nil
+    end
+
+    local SuccessRead, Content = pcall(readfile, ThemePath)
+    if not SuccessRead then
+        return nil
+    end
+
+    local SuccessDecode, Decoded = pcall(HttpService.JSONDecode, HttpService, Content)
+    if not SuccessDecode or typeof(Decoded) ~= "table" then
+        return nil
+    end
+
+    return Decoded
+end
+
+local function BuildCurrentThemeData(): {[string]: any}
+    local Library = ThemeManager.Library
+    local ThemeData = {
+        FontFace = Library.Options.FontFace.Value,
+        BackgroundImage = Library.Options.BackgroundImage.Value
+    }
+
+    for _, SchemeIndex in SchemeIndexes do
+        ThemeData[SchemeIndex] = Library.Options[SchemeIndex].Value:ToHex()
+    end
+
+    return ThemeData
+end
+
+function ThemeManager:SaveCustomTheme(ThemeName: string): any
+    if IsStringEmpty(ThemeName) then
+        return false, "Invalid theme name provided"
+    end
+
+    if string.lower(ThemeName) == "default" then
+        return false, "Invalid theme name provided"
+    end
+
+    local ThemePath = GetThemePath(ThemeName)
+    if ThemePath == false then
+        return false, "Invalid theme name provided"
+    end
+
+    ThemeManager:CheckFolderTree()
+
+    local EncodedData, SuccessEncode, EncodeErrorMessage = ThemeManager:SaveJSON()
+    if not SuccessEncode then
+        return false, EncodeErrorMessage
+    end
+
+    local SuccessWrite, ErrorMessage = pcall(writefile, ThemePath, EncodedData)
+    if not SuccessWrite then
+        return false, "Failed to write theme file: " .. tostring(ErrorMessage)
+    end
+
+    return true
+end
+
+function ThemeManager:Delete(ThemeName: string): (boolean | string?)
+    if IsStringEmpty(ThemeName) then
+        return false, "No theme is selected"
+    end
+
+    local ThemePath = GetThemePath(ThemeName)
+    if ThemePath == false or not isfile(ThemePath) then
+        return false, "Theme file does not exist"
+    end
+
+    local SuccessDelete, ErrorMessage = pcall(delfile, ThemePath)
+    if not SuccessDelete then
+        return false, "Failed to delete theme file: " .. tostring(ErrorMessage)
+    end
+
+    if ThemeName == ThemeManager.DefaultThemeName then
+        ThemeManager:DeleteDefaultTheme()
+    end
+
+    return true
+end
+
+function ThemeManager:GetDefaultTheme(): (string, boolean, string?)
+    ThemeManager:CheckFolderTree()
+
+    local DefaultThemePath = GetDefaultThemePath()
+    if DefaultThemePath == false then
+        return "none", false, "Invalid path provided"
+    end
+
+    if not isfile(DefaultThemePath) then
+        return "none", false, "Default theme is not set"
+    end
+
+    local SuccessRead, DefaultThemeName = pcall(readfile, DefaultThemePath)
+    if not (SuccessRead and typeof(DefaultThemeName) == "string") then
+        return "none", false, DefaultThemeName
+    end
+
+    local ConfigExists = DoesThemeExist(DefaultThemeName, true)
+    if not ConfigExists then
+        return "none", false, "Theme file not found"
+    end
+
+    ThemeManager.DefaultThemeName = DefaultThemeName
+    return DefaultThemeName, true
+end
+
+function ThemeManager:SetDefaultTheme(Theme: any)
+    assert(ThemeManager.Library, "Library is not set, call ThemeManager:SetLibrary(Library) first.")
+    assert(not ThemeManager.AppliedToTab, "Cannot set default theme after applying ThemeManager to a tab!")
+
+    local Library = ThemeManager.Library
+    local DefaultThemeData = ThemeManager.BuiltInThemes["Default"][2]
+
+    local LibraryScheme = {}
+    local FinalTheme = {}
+
+    for _, SchemeIndex in SchemeIndexes do
+        local IndexData = Theme[SchemeIndex]
+        local IndexType = typeof(IndexData)
+        
+        if IndexType == "Color3" then
+            LibraryScheme[SchemeIndex] = IndexData
+            FinalTheme[SchemeIndex] = string.format("#%s", IndexData:ToHex())
+
+        elseif IndexType == "string" then
+            LibraryScheme[SchemeIndex] = Color3.fromHex(IndexData)
+            FinalTheme[SchemeIndex] = if IndexData:sub(1, 1) == "#" then IndexData else string.format("#%s", IndexData)
+        
+        else
+            local Value = DefaultThemeData[SchemeIndex]
+            LibraryScheme[SchemeIndex] = Color3.fromHex(Value)
+            FinalTheme[SchemeIndex] = Value
+        end
+    end
+
+    local FontFace = Theme["FontFace"]
+    local FontFaceType = typeof(FontFace)
+    
+    if FontFaceType == "EnumItem" then
+        LibraryScheme.Font = Font.fromEnum(FontFace)
+        FinalTheme.FontFace = FontFace.Name
+
+    elseif FontFaceType == "string" then
+        LibraryScheme.Font = Font.fromEnum(Enum.Font[FontFace] :: Enum.Font)
+        FinalTheme.FontFace = FontFace
+    
+    else
+        LibraryScheme.Font = Font.fromEnum(Enum.Font.Code)
+        FinalTheme.FontFace = "Code"
+    end
+
+    for _, DefaultSchemeColor in { "RedColor", "DestructiveColor", "DarkColor", "WhiteColor" } do
+        LibraryScheme[DefaultSchemeColor] = Library.Scheme[DefaultSchemeColor]
+    end
+
+    Library.Scheme = LibraryScheme
+    ThemeManager.BuiltInThemes["Default"] = { 1, FinalTheme }
+
+    Library:UpdateColorsUsingRegistry()
+end
+
+function ThemeManager:SaveDefault(ThemeName: string): (boolean, string?)
+    if IsStringEmpty(ThemeName) then
+        return false, "No theme is selected"
+    end
+
+    ThemeManager:CheckFolderTree()
+
+    local DefaultThemePath = GetDefaultThemePath()
+    if DefaultThemePath == false then
+        return false, "Invalid path provided"
+    end
+
+    if not DoesThemeExist(ThemeName, true) then
+        return false, "Theme does not exist"
+    end
+
+    local SuccessWrite, ErrorMessage = pcall(writefile, DefaultThemePath, ThemeName)
+    if not SuccessWrite then
+        return false, ErrorMessage
+    end
+
+    ThemeManager.DefaultThemeName = ThemeName
+    return true
+end
+
+function ThemeManager:LoadDefault()
+    local ThemeName, Success, FetchErrorMessage = ThemeManager:GetDefaultTheme()
+    if not Success or FetchErrorMessage then
+        if FetchErrorMessage ~= "Default theme is not set" then
+            ThemeManager.Library:Notify(string.format("Failed to apply default theme: %s", FetchErrorMessage))
+        end
+
+        return
+    end
+
+    if not ThemeManager:GetCustomTheme(ThemeName) then
+        ThemeManager.Library.Options.ThemeManager_ThemeList:SetValue(ThemeName)
+        return
+    end
+
+    local SuccessLoad, LoadErrorMessage = ThemeManager:ApplyTheme(ThemeName)
+    if not SuccessLoad then
+        ThemeManager.Library:Notify(string.format("Failed to apply default theme: %s", LoadErrorMessage))
+        return
+    end
+
+    ThemeManager.Library:Notify(string.format("Successfully applied default theme %q", ThemeName))
+end
+
+function ThemeManager:DeleteDefaultTheme(): (boolean, string?)
+    ThemeManager:CheckFolderTree()
+
+    local DefaultThemePath = GetDefaultThemePath()
+    if DefaultThemePath == false then
+        return false, "Invalid path provided"
+    end
+
+    if not isfile(DefaultThemePath) then
+        return false, "Default theme is not set"
+    end
+
+    local SuccessDelete, ErrorMessage = pcall(delfile, DefaultThemePath)
+    if not SuccessDelete then
+        return false, ErrorMessage
+    end
+
+    ThemeManager.DefaultThemeName = nil
+    return true
+end
+
+function ThemeManager:GetContrastReport(): { Ratio: number, PairName: string, Passes: boolean }
+    local Library = ThemeManager.Library
+    local FontColorOption = Library.Options.FontColor
+    local BackgroundColorOption = Library.Options.BackgroundColor
+    local MainColorOption = Library.Options.MainColor
+
+    if not (FontColorOption and BackgroundColorOption and MainColorOption) then
+        return { Ratio = math.huge, PairName = "", Passes = true }
+    end
+
+    local FontColor = FontColorOption.Value
+    local Surfaces = {
+        { Name = "font color vs. background color", Color = BackgroundColorOption.Value },
+        { Name = "font color vs. main color", Color = MainColorOption.Value },
+    }
+
+    local WorstRatio, WorstName = math.huge, ""
+    for _, Surface in Surfaces do
+        local Ratio = GetContrastRatio(FontColor, Surface.Color)
+        if Ratio < WorstRatio then
+            WorstRatio = Ratio
+            WorstName = Surface.Name
+        end
+    end
+
+    return {
+        Ratio = WorstRatio,
+        PairName = WorstName,
+        Passes = WorstRatio >= ContrastWarnThreshold,
+    }
+end
+
+function ThemeManager:UpdateContrastWarning()
+    local ContrastLabel = ThemeManager.ContrastLabel
+    if not ContrastLabel or ContrastLabel.Destroyed then
+        return
+    end
+
+    local Library = ThemeManager.Library
+    local Report = ThemeManager:GetContrastReport()
+    local TextLabel = ContrastLabel.TextLabel
+
+    if not Library.Registry[TextLabel] then
+        Library:AddToRegistry(TextLabel, {})
+    end
+
+    if Report.Passes then
+        ContrastLabel:SetText(string.format("Contrast check: good (%.1f:1)", Report.Ratio))
+
+        TextLabel.TextColor3 = Library.Scheme.FontColor
+        Library.Registry[TextLabel].TextColor3 = "FontColor"
+    else
+        ContrastLabel:SetText(string.format(
+            "Low contrast (%.1f:1) between %s. Aim for at least %.1f:1 so text stays readable.",
+            Report.Ratio, Report.PairName, ContrastWarnThreshold
+        ))
+
+        TextLabel.TextColor3 = Library.Scheme.RedColor
+        Library.Registry[TextLabel].TextColor3 = "RedColor"
+
+        if not ThemeManager.ContrastWasPoor then
+            Library:Notify({
+                Title = "Low contrast theme",
+                Description = string.format(
+                    "Your %s has a contrast ratio of %.1f:1, below the recommended %.1f:1. Text may be hard to read.",
+                    Report.PairName, Report.Ratio, ContrastWarnThreshold
+                ),
+                Time = 10,
+            })
+        end
+    end
+
+    ThemeManager.ContrastWasPoor = not Report.Passes
+end
+
+function ThemeManager:ThemeUpdate()
+    local Library = ThemeManager.Library
+
+    for _, SchemeIndex in SchemeIndexes do
+        local Element = Library.Options[SchemeIndex]
+        if not Element then continue end
+
+        Library.Scheme[SchemeIndex] = Element.Value
+    end
+
+    Library:UpdateColorsUsingRegistry()
+    ThemeManager:UpdateContrastWarning()
+end
+
+function ThemeManager:ApplyThemeData(ThemeData: any): (boolean, string?)
+    if typeof(ThemeData) ~= "table" then
+        return false, "Invalid theme data"
+    end
+
+    local Library = ThemeManager.Library
+
+    for Index, Value in ThemeData do
+        if Index == "VideoLink" then
+            continue
+        end
+
+        local Element = Library.Options[Index]
+        local FinalValue = Value
+
+        if Index == "FontFace" then
+            if typeof(Value) ~= "string" or not Enum.Font[Value] then continue end
+            ThemeManager.Library:SetFont(Enum.Font[Value])
+
+        elseif Index == "BackgroundImage" then
+            if typeof(Value) ~= "string" then continue end
+            ThemeManager.Library:SetBackgroundImage(Value)
+
+        elseif table.find(SchemeIndexes, Index) then
+            local SuccessColor, Color = pcall(Color3.fromHex, Value)
+            if not SuccessColor then continue end
+
+            FinalValue = Color
+            Library.Scheme[Index] = FinalValue
+
+        else
+            continue
+        end
+
+        if Element then
+            Element:SetValue(FinalValue)
+        end
+    end
+
+    ThemeManager:ThemeUpdate()
+    return true
+end
+
+function ThemeManager:ApplyTheme(ThemeName: string)
+    if IsStringEmpty(ThemeName) then
+        return false, "No theme is selected"
+    end
+
+    local CustomThemeData = ThemeManager:GetCustomTheme(ThemeName)
+    local Data = CustomThemeData or ThemeManager.BuiltInThemes[ThemeName]
+    
+    if not Data then
+        return false, "Theme not found"
+    end
+    
+    local ThemeData = CustomThemeData or Data[2]
+    return ThemeManager:ApplyThemeData(ThemeData)
+end
+
+function ThemeManager:SaveJSON(): (string, boolean, string?)
+    local ThemeData = BuildCurrentThemeData()
+
+    local SuccessEncode, EncodedData = pcall(HttpService.JSONEncode, HttpService, ThemeData)
+    if not SuccessEncode then
+        return "", false, "Failed to encode data"
+    end
+
+    return EncodedData, true
+end
+
+function ThemeManager:LoadJSON(Content: string): (boolean, string?)
+    if IsStringEmpty(Content) then
+        return false, "No JSON provided"
+    end
+
+    local SuccessDecode, Decoded = pcall(HttpService.JSONDecode, HttpService, Content)
+    if not SuccessDecode or not IsValidThemeData(Decoded) then
+        return false, "Failed to decode theme data"
+    end
+
+    return ThemeManager:ApplyThemeData(Decoded)
+end
+
+local function ShowDialog(
+    Condition: () -> boolean,
+
+    Index: string, 
+    Title: string, 
+    Description: string,
+
+    DestructiveText: string,
+    DestructiveAction: () -> nil
+)
+    if Condition() == false then
+        return DestructiveAction()
+    end
+
+    return ThemeManager.Library.Window:AddDialog(Index, {
+        Title = Title,
+        Description = Description,
+        AutoDismiss = false,
+
+        FooterButtons = {
+            Cancel = {
+                Title = "Cancel",
+                Variant = "Ghost",
+                Order = 1,
+                Callback = function(Dialog)
+                    Dialog:Dismiss()
+                end
+            },
+
+            DestructiveAction = {
+                Title = DestructiveText,
+                Variant = "Destructive",
+                Order = 2,
+                Callback = function(Dialog)
+                    Dialog:Dismiss()
+                    DestructiveAction()
+                end
+            }
+        }
+    })
+end
+
+function ThemeManager:CreateThemeManager(Themesbox: any)
+    assert(ThemeManager.Library, "Library is not set, call ThemeManager:SetLibrary(Library) first.")
+
+    local BuiltInThemesNames = {}
+    for Name, _ThemeData in ThemeManager.BuiltInThemes do
+        table.insert(BuiltInThemesNames, Name)
+    end
+
+    local CustomThemeList, CustomThemeName, ThemeList, FontFace, BackgroundImage, DefaultThemeLabel, ThemeJSONInput
+    local function RefreshList()
+        CustomThemeList:SetValues(ThemeManager:ReloadCustomThemes())
+        CustomThemeList:SetValue(nil)
+
+        ThemeList:SetValues(BuiltInThemesNames)
+    end
+
+    local function RefreshDefaultThemeLabel()
+        local DefaultThemeName, _Success, _ErrorMessage = ThemeManager:GetDefaultTheme()
+
+        DefaultThemeLabel:SetText(string.format("Current default theme: %s", DefaultThemeName))
+        if CustomThemeList then RefreshList() end
+    end
+
+    table.sort(BuiltInThemesNames, function(IndexA, IndexB)
+        return ThemeManager.BuiltInThemes[IndexA][1] < ThemeManager.BuiltInThemes[IndexB][1]
+    end)
+
+    local function CreateColorOption(Text, SchemeIndex)
+        Themesbox:AddLabel(Text):AddColorPicker(SchemeIndex, {
+            Default = ThemeManager.Library.Scheme[SchemeIndex]
+        })
+
+        return ThemeManager.Library.Options[SchemeIndex]
+    end
+
+    local BackgroundColor = CreateColorOption("Background color", "BackgroundColor")
+    local MainColor = CreateColorOption("Main color", "MainColor")
+    local AccentColor = CreateColorOption("Accent color", "AccentColor")
+    local OutlineColor = CreateColorOption("Outline color", "OutlineColor")
+    local FontColor = CreateColorOption("Font color", "FontColor")
+
+    ThemeManager.ContrastLabel = Themesbox:AddLabel({
+        Text = "Contrast check: n/a",
+        DoesWrap = true,
+    })
+
+    Themesbox:AddDropdown("FontFace", {
+        Text = "Font Face",
+        Default = "Code",
+        
+        Values = { "BuilderSans", "Code", "Fantasy", "Gotham", "Jura", "Roboto", "RobotoMono", "SourceSans" },
+        AllowNull = false,
+        Multi = false
+    })
+    
+    Themesbox:AddInput("BackgroundImage", { 
+        Text = "Background Image",
+
+        Default = "",
+        Finished = true,
+        ClearTextOnFocus = false,
+        ClearTextOnBlur = false
+    })
+
+    Themesbox:AddDivider()
+
+    Themesbox:AddDropdown("ThemeManager_ThemeList", { 
+        Text = "Theme list", 
+
+        Values = BuiltInThemesNames,
+        AllowNull = true,
+        Multi = false,
+
+        FormatDisplayValue = function(Value: any)
+            if Value ~= "Default" and Value == ThemeManager.DefaultThemeName then
+                return string.format("%s (default)", Value)
+            end
+
+            return Value
+        end,
+        FormatListValue = function(Value: any)
+            if Value ~= "Default" and Value == ThemeManager.DefaultThemeName then
+                return string.format("%s (default)", Value)
+            end
+
+            return Value
+        end
+    })
+
+    Themesbox:AddButton("Set as default", function()
+        local ThemeName = ThemeList.Value
+        ThemeManager:SaveDefault(ThemeName)
+
+        ThemeManager.Library:Notify(string.format("Successfully set default theme to %q", ThemeName))
+        RefreshDefaultThemeLabel()
+    end)
+
+    Themesbox:AddDivider()
+
+    CustomThemeName = Themesbox:AddInput("ThemeManager_CustomThemeName", { 
+        Text = "Custom theme name" 
+    })
+
+    local function SaveThemeWithContrastCheck(Name: string, SuccessMessage: string, OnSaved: (() -> nil)?)
+        local function DoSave()
+            local Success, ErrorMessage = ThemeManager:SaveCustomTheme(Name)
+            if not Success then
+                ThemeManager.Library:Notify(string.format("Failed to save theme %q: %s", Name, ErrorMessage))
+                return
+            end
+
+            ThemeManager.Library:Notify(string.format(SuccessMessage, Name))
+            if OnSaved then OnSaved() end
+        end
+
+        local Report = ThemeManager:GetContrastReport()
+        if Report.Passes then
+            DoSave()
+            return
+        end
+
+        ShowDialog(
+            function(): boolean
+                return true
+            end,
+
+            "ThemeManager_LowContrastSave",
+            "Low contrast theme",
+            string.format(
+                "This theme has a contrast ratio of %.1f:1 between %s, below the recommended %.1f:1. Text may be hard to read. Save anyway?",
+                Report.Ratio, Report.PairName, ContrastWarnThreshold
+            ),
+
+            "Save Anyway",
+            DoSave
+        )
+    end
+
+    Themesbox:AddButton("Create theme", function()
+        local Name = CustomThemeName.Value
+        if IsStringEmpty(Name) then
+            ThemeManager.Library:Notify("Theme name cannot be empty.")
+            return
+        end
+
+        if string.lower(Name) == "default" then
+            ThemeManager.Library:Notify("Invalid theme name provided.")
+            return
+        end
+
+        ShowDialog(
+            function(): boolean
+                return ThemeManager:GetCustomTheme(Name) ~= nil
+            end,
+
+            "ThemeManager_CreateTheme",
+            "Theme already exists",
+            string.format("A custom theme named %q already exists. Overwriting it will replace it with your current colors.", Name),
+
+            "Overwrite",
+            function()
+                SaveThemeWithContrastCheck(Name, "Successfully created theme %q", RefreshList)
+            end
+        )
+    end)
+
+    Themesbox:AddDivider()
+
+    CustomThemeList = Themesbox:AddDropdown("ThemeManager_CustomThemeList", { 
+        Text = "Custom themes",
+
+        Values = ThemeManager:ReloadCustomThemes(), 
+        AllowNull = true,
+        Multi = false,
+
+        FormatDisplayValue = function(Value: any)
+            if Value == ThemeManager.DefaultThemeName then
+                return string.format("%s (default)", Value)
+            end
+
+            return Value
+        end,
+        FormatListValue = function(Value: any)
+            if Value == ThemeManager.DefaultThemeName then
+                return string.format("%s (default)", Value)
+            end
+
+            return Value
+        end
+    })
+
+    Themesbox:AddButton("Load theme", function()
+        local Name = CustomThemeList.Value
+        if IsStringEmpty(Name) then
+            ThemeManager.Library:Notify("Please select a theme first.")
+            return
+        end
+
+        ThemeManager:ApplyTheme(Name)
+        ThemeManager.Library:Notify(string.format("Successfully loaded theme %q", Name))
+    end)
+
+    Themesbox:AddButton("Overwrite theme", function()
+        local Name = CustomThemeList.Value
+        if IsStringEmpty(Name) then
+            ThemeManager.Library:Notify("Please select a theme first.")
+            return
+        end
+
+        ShowDialog(
+            function(): boolean
+                return true
+            end,
+
+            "ThemeManager_OverwriteTheme",
+            "Overwrite theme",
+            string.format("Are you sure you want to overwrite %q with your current colors? This cannot be undone.", Name),
+
+            "Overwrite",
+            function()
+                SaveThemeWithContrastCheck(Name, "Successfully overwrote theme %q")
+            end
+        )
+    end)
+
+    Themesbox:AddButton("Delete theme", function()
+        local Name = CustomThemeList.Value
+        if IsStringEmpty(Name) then
+            ThemeManager.Library:Notify("Please select a theme first.")
+            return
+        end
+
+        ShowDialog(
+            function(): boolean
+                return true
+            end,
+
+            "ThemeManager_DeleteTheme",
+            "Delete theme",
+            string.format("Are you sure you want to delete %q? This cannot be undone.", Name),
+            
+            "Delete",
+            function()
+                local Success, ErrorMessage = ThemeManager:Delete(Name)
+                if not Success then
+                    ThemeManager.Library:Notify(string.format("Failed to delete theme: %s", ErrorMessage))
+                    return
+                end
+
+                ThemeManager.Library:Notify(string.format("Successfully deleted theme %q", Name))
+                RefreshDefaultThemeLabel()
+            end
+        )
+    end)
+
+    Themesbox:AddButton("Refresh list", RefreshList)
+
+    Themesbox:AddButton("Set as default", function()
+        local Name = CustomThemeList.Value
+        if IsStringEmpty(Name) then
+            ThemeManager.Library:Notify("Please select a theme first.")
+            return
+        end
+
+        ThemeManager:SaveDefault(Name)
+        ThemeManager.Library:Notify(string.format("Successfully set default theme to %q", Name))
+        RefreshDefaultThemeLabel()
+    end)
+
+    Themesbox:AddButton("Reset default", function()
+        ShowDialog(
+            function(): boolean
+                return true
+            end,
+
+            "ThemeManager_ResetDefault",
+            "Reset default theme",
+            "Are you sure you want to clear the default theme? The library will revert to its built-in default on next load.",
+            
+            "Reset",
+            function()
+                local Success, ErrorMessage = ThemeManager:DeleteDefaultTheme()
+                if not Success then
+                    ThemeManager.Library:Notify(string.format("Failed to reset default theme: %s", ErrorMessage))
+                    return
+                end
+
+                ThemeManager.Library:Notify("Successfully reset default theme.")
+                RefreshDefaultThemeLabel()
+            end
+        )
+    end)
+
+    DefaultThemeLabel = Themesbox:AddLabel("Current default theme: ...", true);
+
+    Themesbox:AddDivider()
+
+    Themesbox:AddInput("ThemeManager_ThemeJSON", {
+        Text = "Theme JSON"
+    })
+
+    Themesbox:AddButton("Import theme", function()
+        local ThemeJSON = ThemeJSONInput.Value
+        if IsStringEmpty(ThemeJSON) then
+            ThemeManager.Library:Notify("Theme JSON cannot be empty")
+            return
+        end
+
+        ShowDialog(
+            function(): boolean
+                return true
+            end,
+
+            "ThemeManager_ImportTheme",
+            "Import theme",
+            "Are you sure you want to import this theme? Your current colors will be overwritten.",
+
+            "Import",
+            function()
+                local Success, ErrorMessage = ThemeManager:LoadJSON(ThemeJSON)
+                if not Success then
+                    ThemeManager.Library:Notify(string.format("Failed to import theme: %s", ErrorMessage))
+                    return
+                end
+
+                ThemeManager.Library:Notify("Successfully imported theme")
+            end
+        )
+    end)
+
+    Themesbox:AddButton("Export current theme", function()
+        local EncodedData, Success, ErrorMessage = ThemeManager:SaveJSON()
+        if not Success then
+            ThemeManager.Library:Notify(ErrorMessage)
+            return
+        end
+
+        ThemeJSONInput:SetValue(EncodedData)
+        if setclipboard then
+            setclipboard(EncodedData)
+            ThemeManager.Library:Notify("Copied theme to your clipboard")
+        end
+    end)
+
+    CustomThemeList, CustomThemeName, ThemeList, FontFace, BackgroundImage, ThemeJSONInput =
+        ThemeManager.Library.Options.ThemeManager_CustomThemeList,
+        ThemeManager.Library.Options.ThemeManager_CustomThemeName,
+        ThemeManager.Library.Options.ThemeManager_ThemeList,
+        ThemeManager.Library.Options.FontFace,
+        ThemeManager.Library.Options.BackgroundImage,
+        ThemeManager.Library.Options.ThemeManager_ThemeJSON;
+
+    ThemeList:OnChanged(function()
+        ThemeManager:ApplyTheme(ThemeList.Value)
+    end)
+
+    local function UpdateTheme()
+        ThemeManager:ThemeUpdate()
+    end
+
+    BackgroundColor:OnChanged(UpdateTheme)
+    MainColor:OnChanged(UpdateTheme)
+    AccentColor:OnChanged(UpdateTheme)
+    OutlineColor:OnChanged(UpdateTheme)
+    FontColor:OnChanged(UpdateTheme)
+    FontFace:OnChanged(function(Value) ThemeManager.Library:SetFont(Enum.Font[Value]) end)
+    BackgroundImage:OnChanged(function(Value) ThemeManager.Library:SetBackgroundImage(Value) end)
+
+    ThemeManager:LoadDefault()
+    ThemeManager:UpdateContrastWarning()
+    ThemeManager.AppliedToTab = true
+    RefreshDefaultThemeLabel()
+
+    return Themesbox
+end
+
+function ThemeManager:CreateGroupBox(Tab: any, IconName: string)
+    return Tab:AddGroupbox({
+        Side = "Left",
+        Name = "Themes",
+        IconName = IconName or "paintbrush",
+    })
+end
+
+function ThemeManager:ApplyToTab(Tab: any, IconName: string)
+    local Groupbox = ThemeManager:CreateGroupBox(Tab, IconName)
+    return ThemeManager:CreateThemeManager(Groupbox)
+end
+
+function ThemeManager:ApplyToGroupbox(Groupbox: any)
+    return ThemeManager:CreateThemeManager(Groupbox)
+end
+
+SaveManager:SetLibrary(Library)
+SaveManager:BuildFolderTree()
+
+ThemeManager:SetLibrary(Library)
+
+Library.SaveManager = SaveManager
+Library.ThemeManager = ThemeManager
+
+getgenv().__ObsidianInstance = Library
 getgenv().Library = Library
+getgenv().ObsidianSaveManager = SaveManager
+getgenv().ObsidianThemeManager = ThemeManager
+
 return Library
+]=]
