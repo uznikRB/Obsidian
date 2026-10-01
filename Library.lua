@@ -15561,8 +15561,6 @@ function Library:Unload()
     Env.ObsidianSaveManager = nil
     Env.ObsidianThemeManager = nil
 end
-end
-
 --// Conditions (Library:If) \\--
 Library.Conditions = {}
 local ConditionConnection
