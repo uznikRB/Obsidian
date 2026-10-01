@@ -1,4 +1,3 @@
-local Library = [=[
 local cloneref = (cloneref or clonereference or function(instance: any)
     return instance
 end)
@@ -18066,4 +18065,3 @@ getgenv().ObsidianSaveManager = SaveManager
 getgenv().ObsidianThemeManager = ThemeManager
 
 return Library
-]=]
